@@ -661,8 +661,28 @@ async def main() -> int:
         await q3.stop()
         print("19) yeniden dene OK")
 
+        # 20) eski gecici dosyalar temizlenir
+        root = Path(settings.download_dir)
+        old_dir = root / "dl-old-test"
+        old_dir.mkdir(parents=True, exist_ok=True)
+        (old_dir / "x.part").write_text("x", encoding="utf-8")
+        old_file = root / "old-test.part"
+        old_file.write_text("x", encoding="utf-8")
+        fresh_file = root / "fresh-test.tmp"
+        fresh_file.write_text("x", encoding="utf-8")
+        past = time.time() - 10 * 3600
+        os.utime(old_dir, (past, past))
+        os.utime(old_file, (past, past))
+        removed = queue._cleanup_downloads(3600)
+        check(removed >= 2, f"eski dosyalar temizlenmedi: {removed}")
+        check(not old_dir.exists(), "eski klasor silinmedi")
+        check(not old_file.exists(), "eski dosya silinmedi")
+        check(fresh_file.exists(), "yeni dosya yanlislikla silindi")
+        fresh_file.unlink(missing_ok=True)
+        print("20) gecici dosya temizligi OK")
+
         stats = await db.stats()
-        print("20) istatistikler:", stats)
+        print("21) istatistikler:", stats)
     except AssertionError as exc:
         print("HATA:", exc)
         return 1

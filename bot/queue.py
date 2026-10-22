@@ -82,6 +82,8 @@ class JobQueue:
         self._pending: Counter[int] = Counter()
         self._jobs: dict[tuple[int, str, str], Job] = {}
         self._retry_jobs: dict[str, Job] = {}
+        self._tmpdirs: set[Path] = set()
+        self._janitor: asyncio.Task[None] | None = None
         self._active = 0
 
     # ------------------------------------------------------------------ yasam
@@ -90,15 +92,27 @@ class JobQueue:
         for index in range(self._settings.concurrency):
             task = asyncio.create_task(self._worker(index), name=f"dl-worker-{index}")
             self._tasks.append(task)
+        self._janitor = asyncio.create_task(
+            self._cleanup_loop(), name="dl-temp-janitor"
+        )
         log.info("Kuyruk basladi (%s isci)", len(self._tasks))
 
     async def stop(self) -> None:
+        if self._janitor is not None:
+            self._janitor.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._janitor
+            self._janitor = None
         for task in self._tasks:
             task.cancel()
         for task in self._tasks:
             with contextlib.suppress(asyncio.CancelledError):
                 await task
         self._tasks.clear()
+        # Kapanista yarim kalan gecici klasorleri temizle.
+        for path in list(self._tmpdirs):
+            await asyncio.to_thread(shutil.rmtree, path, True)
+            self._tmpdirs.discard(path)
 
     # ----------------------------------------------------------------- durum
 
@@ -297,6 +311,7 @@ class JobQueue:
             with contextlib.suppress(asyncio.CancelledError):
                 await ticker
             await asyncio.to_thread(shutil.rmtree, tmpdir, True)
+            self._tmpdirs.discard(tmpdir)
 
     # ------------------------------------------------------------ galeri (foto)
 
@@ -337,6 +352,7 @@ class JobQueue:
             await self._fail(job, "❌ Medya gönderilemedi. Lütfen tekrar deneyin.")
         finally:
             await asyncio.to_thread(shutil.rmtree, tmpdir, True)
+            self._tmpdirs.discard(tmpdir)
 
     async def _send_gallery(self, job: Job, files: list[Path]) -> None:
         caption = (
@@ -514,13 +530,50 @@ class JobQueue:
     # --------------------------------------------------------------- yardimci
 
     async def _mkdtemp(self, job: Job) -> Path:
-        return Path(
+        path = Path(
             await asyncio.to_thread(
                 tempfile.mkdtemp,
                 prefix=f"dl-{job.id}-",
                 dir=str(self._settings.download_dir),
             )
         )
+        self._tmpdirs.add(path)
+        return path
+
+    async def _cleanup_loop(self) -> None:
+        """Eski gecici dosyalari periyodik olarak temizler."""
+        while True:
+            try:
+                removed = await asyncio.to_thread(
+                    self._cleanup_downloads, 6 * 3600
+                )
+                if removed:
+                    log.info("%s eski gecici dosya/klasor temizlendi.", removed)
+            except Exception:  # noqa: BLE001 - temizlik botu durdurmasin
+                log.exception("Gecici dosya temizligi basarisiz")
+            await asyncio.sleep(30 * 60)
+
+    def _cleanup_downloads(self, max_age_sec: float) -> int:
+        root = self._settings.download_dir
+        if not root.exists():
+            return 0
+
+        now = time.time()
+        removed = 0
+        for entry in root.iterdir():
+            if entry in self._tmpdirs:
+                continue
+            try:
+                if now - entry.stat().st_mtime < max_age_sec:
+                    continue
+                if entry.is_dir():
+                    shutil.rmtree(entry, ignore_errors=True)
+                else:
+                    entry.unlink(missing_ok=True)
+                removed += 1
+            except OSError:
+                log.debug("Gecici giris temizlenemedi: %s", entry)
+        return removed
 
     async def _progress_loop(self, job: Job, state: dict[str, Any]) -> None:
         while True:
