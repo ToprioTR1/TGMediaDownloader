@@ -18,7 +18,12 @@ Built with Python 3.12 + [aiogram 3](https://github.com/aiogram/aiogram) +
 - 📦 Size guard: if the selected quality would exceed `MAX_UPLOAD_MB`, it automatically
   steps down to the next lower quality
 - 🎵 Audio only with `mp3` / `ses` (`ses` is Turkish for "audio")
+- 📄 Send as a file with `dosya` / `belge` / `file`
 - ⚡️ `file_id` cache: requesting the same video again sends it instantly without re-downloading
+- 🧵 Duplicate links: sending the same link while it is still downloading attaches
+  to the existing job instead of starting a second download
+- 🔁 Retry button on failed downloads
+- ⚙️ Per-user defaults via `/ayar`: target quality, audio-only links, captions
 - 🔘 `🔗 Source` · `🎵 Get audio` buttons under videos
 - 📝 Links in media captions and in replied-to messages are processed too
 - 🖼 Instagram photo / carousel posts (via gallery-dl, sent as an album)
@@ -28,7 +33,8 @@ Built with Python 3.12 + [aiogram 3](https://github.com/aiogram/aiogram) +
 - ⭐ Privilege promotion: `/promote @username` removes the user's daily limit
   (`/demote` restores it)
 - 👤 User registration and download statistics (SQLite)
-- 🛠 Admin panel: `/stats`, `/users`, `/broadcast`
+- 🛠 Admin panel: `/stats`, `/users`, `/cache`, `/broadcast`
+- 🧹 Temporary files are cleaned periodically and on graceful shutdown
 - 🍪 `cookies.txt` support for Instagram/TikTok
 - 🔄 Automatic yt-dlp + gallery-dl update on Docker startup (`AUTO_UPDATE_YTDLP=1`)
 - 🐳 ffmpeg comes preinstalled in the Docker image
@@ -197,6 +203,24 @@ Requesting the same video a second time sends it **instantly** from the
 `file_id` cache. It also works when the link is in a post caption or when you
 reply to a message with a link: reply to the post and just type `720p`.
 
+If the same link is sent again while it is still queued or downloading, the new
+message attaches to the existing job; the media is sent to every attached chat
+when it is ready. Failed jobs keep the error message and show a
+`🔁 Yeniden dene` (retry) button.
+
+Use `/ayar` to save personal defaults:
+
+```text
+/ayar                     # show current settings
+/ayar kalite 1080         # default target quality (0 = platform default)
+/ayar ses aç              # links without a quality are downloaded as audio
+/ayar ses kapat           # audio only when mp3/ses is written
+/ayar caption kapat       # send media without captions
+```
+
+An explicit quality in the message always overrides the saved default. With
+audio-only mode enabled, write `720p` (or another quality) to request video.
+
 ### Quality rules
 
 | Message | Result |
@@ -206,11 +230,12 @@ reply to a message with a link: reply to the post and just type `720p`.
 | `https://... 720p` | Nearest available quality to 720p |
 | `https://... 4k` | Nearest available quality to 4K (2160p) |
 | `https://... mp3` | Audio only (MP3 192 kbps) |
+| `https://... dosya` | Send the downloaded media as a Telegram document |
 
-Defaults can be changed with the `QUALITY_*` variables in `.env`.
-If the estimated size of the selected quality exceeds `MAX_UPLOAD_MB`, the bot
-steps down to a lower quality before downloading; if none fit, it shows a clear
-error. At most 3 links are processed per message.
+Defaults can be changed with the `QUALITY_*` variables in `.env` or per user with
+`/ayar`. If the estimated size of the selected quality exceeds `MAX_UPLOAD_MB`,
+the bot steps down to a lower quality before downloading; if none fit, it shows
+a clear error. At most 3 links are processed per message.
 
 ### Commands
 
@@ -218,10 +243,14 @@ error. At most 3 links are processed per message.
 |---|---|---|
 | `/start` | everyone | Welcome message |
 | `/help` | everyone | Platforms and limits |
+| `/ayar` | everyone | Personal defaults: quality, audio-only, captions |
 | `/me` | everyone | Your own usage statistics |
 | `/admin` | admin | Admin panel with buttons |
 | `/stats` | admin | User/download statistics |
 | `/users` | admin | Last 10 users (`⭐` = unlimited access) |
+| `/cache` | admin | Cache count/size and cleanup buttons |
+| `/cache temizle 7` | admin | Delete cache entries older than 7 days |
+| `/cache tum` | admin | Clear the entire cache |
 | `/broadcast <message>` | admin | Send an announcement to everyone |
 | `/promote @username` | admin | Grant unlimited daily downloads (replying to a message also works) |
 | `/demote @username` | admin | Revoke unlimited access |
@@ -249,7 +278,7 @@ bot/
 ├── middlewares.py   # user registration
 ├── utils.py         # URL/quality parsing, cache key, formatting
 └── handlers/
-    ├── start.py     # /start /help /me
+    ├── start.py     # /start /help /ayar /me
     ├── download.py  # link/caption/reply → quality + size resolution → queue
     └── admin.py     # admin commands (including promote/demote)
 ```
@@ -263,8 +292,9 @@ For Instagram photo posts, `gallery.py` takes over if yt-dlp fails.
 
 `tests/smoke_test.py` exercises the end-to-end flow with a fake Bot object (it
 downloads a small TikTok video from the real network and checks default/requested
-quality, MP3, the file_id cache, caption and reply support, the size guard,
-photo delivery via gallery-dl, and the DB and admin steps):
+quality, MP3, document delivery, the file_id cache, in-flight deduplication,
+retry, caption and reply support, the size guard, photo delivery via gallery-dl,
+`/ayar`, temporary-file cleanup, and the DB/admin/cache steps):
 
 ```bash
 pip install -r requirements.txt
@@ -291,15 +321,18 @@ Telegram.
 ## Notes
 
 - Videos are kept in a temporary directory and deleted after sending; they do
-  not accumulate on the server.
+  not accumulate on the server. Leftover files older than 6 hours are removed by
+  a janitor every 30 minutes, and tracked temporary directories are removed on
+  graceful shutdown.
 - After a successful send, the progress/status message is deleted; only the
   delivered media remains in the chat. On error, the message stays with an
-  explanation.
+  explanation and a retry button.
 - Instagram photo/carousel posts are downloaded with gallery-dl; for posts that
   contain video, yt-dlp is used for quality selection.
 - The `file_id` cache is stored in SQLite (`CACHE_DAYS`, 30 days by default).
   If Telegram rejects a file, the cache entry is removed automatically and the
-  media is downloaded again.
+  media is downloaded again. Old entries are pruned at startup, and admins can
+  inspect or clear the cache with `/cache`.
 - Live streams are not supported.
 - Only use this bot for content you have the right to download and in
   compliance with the platforms' terms of service. You are responsible for how

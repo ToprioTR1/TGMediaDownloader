@@ -15,7 +15,11 @@ ile yazıldı, Docker ile çalışacak şekilde hazırlandı.
   yazmazsan platform varsayılanı (Instagram 1280p, TikTok 1012p, YouTube 720p)
 - 📦 Boyut koruması: seçilen kalite `MAX_UPLOAD_MB` limitini aşacaksa otomatik bir alt kaliteye iner
 - 🎵 `mp3` / `ses` yazarak sadece ses indirme
+- 📄 `dosya` / `belge` / `file` yazarak medyayı Telegram dosyası olarak gönderme
 - ⚡️ `file_id` önbelleği: aynı video tekrar istenirse yeniden indirilmeden anında gönderilir
+- 🧵 Aynı link indirilirken tekrar gönderilirse ikinci indirme açılmaz; yeni mesaj mevcut işe bağlanır
+- 🔁 Başarısız indirmelerde `Yeniden dene` butonu
+- ⚙️ `/ayar` ile kişisel varsayılanlar: kalite, ses tercihi, caption
 - 🔘 Videoların altında `🔗 Kaynak` · `🎵 Ses olarak al` butonları
 - 📝 Medya açıklamasındaki (caption) ve yanıtlanan mesajdaki bağlantılar da işlenir
 - 🖼 Instagram fotoğraf / carousel gönderileri (gallery-dl ile, albüm olarak)
@@ -24,7 +28,8 @@ ile yazıldı, Docker ile çalışacak şekilde hazırlandı.
 - 📉 Günlük indirme limiti ve spam koruması (cooldown)
 - ⭐ Yetki yükseltme: `/promote @kullanıcıadı` ile kullanıcının günlük limiti kaldırılır (`/demote` ile geri alınır)
 - 👤 Kullanıcı kaydı, indirme istatistikleri (SQLite)
-- 🛠 Admin paneli: `/stats`, `/users`, `/broadcast`
+- 🛠 Admin paneli: `/stats`, `/users`, `/cache`, `/broadcast`
+- 🧹 Geçici dosyalar periyodik olarak ve kapanışta temizlenir
 - 🍪 Instagram/TikTok için `cookies.txt` desteği
 - 🔄 Docker açılışında yt-dlp + gallery-dl otomatik güncelleme (`AUTO_UPDATE_YTDLP=1`)
 - 🐳 Docker imajında ffmpeg hazır gelir
@@ -189,6 +194,23 @@ Aynı video ikinci kez istendiğinde `file_id` önbelleğinden **anında** gönd
 Gönderi açıklamasında (caption) link varsa veya linki bir mesajı yanıtlayarak
 gönderirsen de çalışır: gönderiyi yanıtla, sadece `720p` yaz.
 
+Aynı link indirilirken tekrar gönderilirse yeni iş açılmaz; yeni mesaj mevcut
+indirmeye bağlanır ve medya hazır olunca her iki sohbete de gönderilir. Başarısız
+işlerde hata mesajı `🔁 Yeniden dene` butonuyla birlikte kalır.
+
+`/ayar` ile kişisel varsayılanları kaydedebilirsin:
+
+```text
+/ayar                     # mevcut ayarları göster
+/ayar kalite 1080         # varsayılan hedef kalite (0 = platform varsayılanı)
+/ayar ses aç              # kalite yazılmayan linkleri ses olarak indir
+/ayar ses kapat           # ses yalnızca mp3/ses yazınca indirilsin
+/ayar caption kapat       # medyayı açıklamasız gönder
+```
+
+Mesajda açıkça yazılan kalite her zaman kayıtlı varsayılanı ezer. Ses modu
+açıkken video istemek için linkin sonuna `720p` gibi bir kalite yaz.
+
 ### Kalite kuralları
 
 | Mesaj | Sonuç |
@@ -198,11 +220,12 @@ gönderirsen de çalışır: gönderiyi yanıtla, sadece `720p` yaz.
 | `https://... 720p` | 720p'ye en yakın mevcut kalite |
 | `https://... 4k` | 4K (2160p) en yakın kalite |
 | `https://... mp3` | Sadece ses (MP3 192 kbps) |
+| `https://... dosya` | İndirilen medyayı Telegram dosyası olarak gönder |
 
-Varsayılanlar `.env` içindeki `QUALITY_*` değişkenleriyle değiştirilebilir.
-Seçilen kalitenin tahmini boyutu `MAX_UPLOAD_MB` limitini aşacaksa bot
-indirmeden önce bir alt kaliteye iner; hiçbiri sığmıyorsa net bir hata gösterir.
-Bir mesajda en fazla 3 bağlantı işlenir.
+Varsayılanlar `.env` içindeki `QUALITY_*` değişkenleriyle veya kullanıcı bazında
+`/ayar` ile değiştirilebilir. Seçilen kalitenin tahmini boyutu `MAX_UPLOAD_MB`
+limitini aşacaksa bot indirmeden önce bir alt kaliteye iner; hiçbiri sığmıyorsa
+net bir hata gösterir. Bir mesajda en fazla 3 bağlantı işlenir.
 
 ### Komutlar
 
@@ -210,10 +233,14 @@ Bir mesajda en fazla 3 bağlantı işlenir.
 |---|---|---|
 | `/start` | herkes | Karşılama |
 | `/help` | herkes | Platformlar ve limitler |
+| `/ayar` | herkes | Kişisel varsayılanlar: kalite, ses, caption |
 | `/me` | herkes | Kendi kullanım istatistikleri |
 | `/admin` | admin | Butonlu admin paneli |
 | `/stats` | admin | Kullanıcı/indirme istatistikleri |
 | `/users` | admin | Son 10 kullanıcı (`⭐` = sınırsız hak) |
+| `/cache` | admin | Önbellek adedi/boyutu ve temizleme butonları |
+| `/cache temizle 7` | admin | 7 günden eski önbellek kayıtlarını sil |
+| `/cache tum` | admin | Tüm önbelleği sil |
 | `/broadcast <mesaj>` | admin | Herkese duyuru |
 | `/promote @kullanıcıadı` | admin | Kullanıcıya sınırsız günlük indirme hakkı ver (mesaja yanıt da olur) |
 | `/demote @kullanıcıadı` | admin | Sınırsız hakkı geri al |
@@ -241,7 +268,7 @@ bot/
 ├── middlewares.py   # kullanıcı kaydı
 ├── utils.py         # URL/kalite ayrıştırma, önbellek anahtarı, biçimlendirme
 └── handlers/
-    ├── start.py     # /start /help /me
+    ├── start.py     # /start /help /ayar /me
     ├── download.py  # link/caption/yanıt → kalite + boyut çözümleme → kuyruk
     └── admin.py     # admin komutları (promote/demote dahil)
 ```
@@ -254,9 +281,10 @@ Instagram fotoğraf gönderilerinde yt-dlp başarısız olursa `gallery.py` devr
 ## Test
 
 `tests/smoke_test.py` sahte bir Bot nesnesiyle uçtan uca akışı dener (gerçek
-ağdan küçük bir TikTok videosu indirir; varsayılan/istenen kalite, MP3,
-file_id önbelleği, caption ve yanıt desteği, boyut koruması, gallery-dl ile
-fotoğraf gönderimi, DB ve admin adımlarını kontrol eder):
+ağdan küçük bir TikTok videosu indirir; varsayılan/istenen kalite, MP3, dosya
+olarak gönderim, file_id önbelleği, aynı linkin tekilleştirilmesi, yeniden deneme,
+caption ve yanıt desteği, boyut koruması, gallery-dl ile fotoğraf gönderimi,
+`/ayar`, geçici dosya temizliği, DB/admin/önbellek adımlarını kontrol eder):
 
 ```bash
 pip install -r requirements.txt
@@ -282,12 +310,17 @@ Test kendi verisini `.tmp/` altında oluşturur ve Telegram'a gerçek istek atma
 ## Notlar
 
 - Videolar geçici klasörde tutulur ve gönderimden sonra silinir; sunucuda birikmez.
+  6 saatten eski artık dosyalar 30 dakikada bir çalışan temizlik göreviyle,
+  takip edilen geçici klasörler ise kapanışta silinir.
 - Başarılı gönderimden sonra ilerleme/durum mesajı silinir; sohbette sadece
-  gönderilen medya kalır. Hata durumunda mesaj açıklamayla birlikte kalır.
+  gönderilen medya kalır. Hata durumunda mesaj açıklama ve yeniden deneme
+  butonuyla birlikte kalır.
 - Instagram fotoğraf/carousel gönderileri gallery-dl ile indirilir; video içeren
   gönderilerde kalite seçimi için yt-dlp kullanılır.
 - `file_id` önbelleği SQLite'ta tutulur (`CACHE_DAYS`, varsayılan 30 gün).
   Telegram dosyayı reddederse önbellek otomatik temizlenir ve yeniden indirilir.
+  Eski kayıtlar açılışta budanır; adminler `/cache` ile önbelleği inceleyebilir
+  veya temizleyebilir.
 - Canlı yayınlar desteklenmez.
 - Bu botu yalnızca indirmeye hakkınız olan içerikler ve platformların kullanım
   koşullarına uygun şekilde kullanın. Sorumluluk kullanıcıya aittir.
