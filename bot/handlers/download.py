@@ -344,6 +344,25 @@ async def on_text(
 # --------------------------------------------------------------- buton aksiyonlari
 
 
+@router.callback_query(F.data.startswith("retry|"))
+async def on_retry(callback: CallbackQuery, queue: JobQueue) -> None:
+    if callback.message is None:
+        await callback.answer()
+        return
+
+    job_id = (callback.data or "").split("|", 1)[1]
+    if not await queue.retry(job_id, callback.message.chat.id):
+        await callback.answer(
+            "Bu iş artık yeniden denenemiyor. Linki tekrar gönderin.",
+            show_alert=True,
+        )
+        return
+
+    with suppress(TelegramBadRequest):
+        await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.answer("Yeniden denendi 🔁")
+
+
 async def _resend_cached(bot: Bot, chat_id: int, row: dict) -> None:
     caption = f"<b>{escape((row.get('title') or 'Medya')[:200])}</b>"
     media_type = row["media_type"]

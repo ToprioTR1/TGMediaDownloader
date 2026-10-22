@@ -636,8 +636,33 @@ async def main() -> int:
         await q2.stop()
         print("18) ayni link dedup OK")
 
+        # 19) hata sonrasi yeniden dene
+        q3 = JobQueue(bot, db, settings, downloader, gallery)
+        failed = Job(
+            id="fail1",
+            user_id=ADMIN.id,
+            chat_id=ADMIN.id,
+            status_message_id=9010,
+            url="https://example.com/fail",
+            preset="h:720",
+            title="Test",
+            platform="Test",
+        )
+        q3._remember_retry(failed)
+        mark = len(bot.calls)
+        check(await q3.retry("fail1", ADMIN.id) is True, "retry kuyruga alinmadi")
+        check(
+            any("Yeniden deneniyor" in t for t in bot.texts_since(mark)),
+            "retry durum mesaji yok",
+        )
+        retry_job = q3._jobs.get((ADMIN.id, failed.url, failed.preset))
+        check(retry_job is not None and retry_job.id != "fail1", "retry isi olusmadi")
+        check(await q3.retry("fail1", ADMIN.id) is False, "ayni retry iki kez calisti")
+        await q3.stop()
+        print("19) yeniden dene OK")
+
         stats = await db.stats()
-        print("19) istatistikler:", stats)
+        print("20) istatistikler:", stats)
     except AssertionError as exc:
         print("HATA:", exc)
         return 1

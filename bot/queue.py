@@ -8,6 +8,7 @@ import logging
 import shutil
 import tempfile
 import time
+import uuid
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -22,6 +23,8 @@ from aiogram.exceptions import (
 )
 from aiogram.types import (
     FSInputFile,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
     InputMediaPhoto,
     InputMediaVideo,
     LinkPreviewOptions,
@@ -78,6 +81,7 @@ class JobQueue:
         self._tasks: list[asyncio.Task[None]] = []
         self._pending: Counter[int] = Counter()
         self._jobs: dict[tuple[int, str, str], Job] = {}
+        self._retry_jobs: dict[str, Job] = {}
         self._active = 0
 
     # ------------------------------------------------------------------ yasam
@@ -108,6 +112,34 @@ class JobQueue:
     @property
     def active_count(self) -> int:
         return self._active
+
+    async def retry(self, job_id: str, chat_id: int) -> bool:
+        """Hata alan bir isi yeni bir durum mesajiyla tekrar kuyruga alir."""
+        job = self._retry_jobs.pop(job_id, None)
+        if job is None:
+            return False
+
+        status = await self._bot.send_message(chat_id, "🔁 <b>Yeniden deneniyor…</b>")
+        new_job = Job(
+            id=uuid.uuid4().hex[:10],
+            user_id=job.user_id,
+            chat_id=chat_id,
+            status_message_id=status.message_id,
+            url=job.url,
+            preset=job.preset,
+            title=job.title,
+            platform=job.platform,
+            duration=job.duration,
+            kind=job.kind,
+            source_url=job.source_url,
+        )
+        try:
+            await self.submit(new_job)
+        except QueueFullError as exc:
+            with contextlib.suppress(TelegramBadRequest):
+                await status.edit_text(f"❌ {escape(str(exc))}")
+            return False
+        return True
 
     async def submit(self, job: Job) -> bool:
         """Isi kuyruga ekler.
@@ -247,7 +279,7 @@ class JobQueue:
             await self._db.record_download(
                 job.user_id, job.url, job.platform, job.preset, "error"
             )
-            await self._edit(job, f"❌ {escape(str(exc))}")
+            await self._fail(job, f"❌ {escape(str(exc))}")
         except TelegramForbiddenError:
             log.warning("Kullanici botu engellemis: %s", job.user_id)
         except asyncio.CancelledError:
@@ -257,7 +289,9 @@ class JobQueue:
             await self._db.record_download(
                 job.user_id, job.url, job.platform, job.preset, "error"
             )
-            await self._edit(job, "❌ Beklenmeyen bir hata oluştu. Lütfen tekrar deneyin.")
+            await self._fail(
+                job, "❌ Beklenmeyen bir hata oluştu. Lütfen tekrar deneyin."
+            )
         finally:
             ticker.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -292,7 +326,7 @@ class JobQueue:
             await self._db.record_download(
                 job.user_id, job.url, job.platform, "gallery", "error"
             )
-            await self._edit(job, f"❌ {escape(str(exc))}")
+            await self._fail(job, f"❌ {escape(str(exc))}")
         except TelegramForbiddenError:
             log.warning("Kullanici botu engellemis: %s", job.user_id)
         except Exception:  # noqa: BLE001
@@ -300,7 +334,7 @@ class JobQueue:
             await self._db.record_download(
                 job.user_id, job.url, job.platform, "gallery", "error"
             )
-            await self._edit(job, "❌ Medya gönderilemedi. Lütfen tekrar deneyin.")
+            await self._fail(job, "❌ Medya gönderilemedi. Lütfen tekrar deneyin.")
         finally:
             await asyncio.to_thread(shutil.rmtree, tmpdir, True)
 
@@ -496,6 +530,26 @@ class JobQueue:
 
     def _targets(self, job: Job) -> list[tuple[int, int]]:
         return [(job.chat_id, job.status_message_id), *job.extra_targets]
+
+    def _retry_keyboard(self, job: Job) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="🔁 Yeniden dene", callback_data=f"retry|{job.id}"
+                    )
+                ]
+            ]
+        )
+
+    def _remember_retry(self, job: Job) -> None:
+        self._retry_jobs[job.id] = job
+        while len(self._retry_jobs) > 500:
+            self._retry_jobs.pop(next(iter(self._retry_jobs)))
+
+    async def _fail(self, job: Job, text: str) -> None:
+        self._remember_retry(job)
+        await self._edit(job, text, keyboard=self._retry_keyboard(job))
 
     async def _delete(self, job: Job) -> None:
         """Basarili gonderimden sonra durum mesajlarini siler."""
