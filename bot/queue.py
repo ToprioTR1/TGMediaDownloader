@@ -55,8 +55,6 @@ class Job:
     kind: str = "ytdlp"  # ytdlp | gallery
     source_url: str | None = None
     enqueued_at: float = field(default_factory=time.time)
-    extra_targets: list[tuple[int, int]] = field(default_factory=list)
-    sending: bool = False
     show_caption: bool = True
     as_document: bool = False
 
@@ -134,18 +132,26 @@ class JobQueue:
     def active_count(self) -> int:
         return self._active
 
-    async def retry(self, job_id: str, chat_id: int) -> bool:
-        """Hata alan bir isi yeni bir durum mesajiyla tekrar kuyruga alir."""
+    async def retry(self, job_id: str, chat_id: int, message_id: int) -> bool:
+        """Hata alan bir isi ayni mesaji duzenleyerek tekrar kuyruga alir."""
         job = self._retry_jobs.pop(job_id, None)
         if job is None:
             return False
 
-        status = await self._bot.send_message(chat_id, "🔁 <b>Yeniden deneniyor…</b>")
+        # Yeni mesaj gondermek yerine mevcut hata mesajini durum mesajina cevir.
+        with contextlib.suppress(TelegramBadRequest):
+            await self._bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text="🔁 <b>Yeniden deneniyor…</b>",
+                reply_markup=None,
+            )
+
         new_job = Job(
             id=uuid.uuid4().hex[:10],
             user_id=job.user_id,
             chat_id=chat_id,
-            status_message_id=status.message_id,
+            status_message_id=message_id,
             url=job.url,
             preset=job.preset,
             title=job.title,
@@ -160,24 +166,29 @@ class JobQueue:
             await self.submit(new_job)
         except QueueFullError as exc:
             with contextlib.suppress(TelegramBadRequest):
-                await status.edit_text(f"❌ {escape(str(exc))}")
+                await self._bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=f"❌ {escape(str(exc))}",
+                    reply_markup=None,
+                )
             return False
         return True
 
     async def submit(self, job: Job) -> bool:
         """Isi kuyruga ekler.
 
-        Ayni kullanici ayni URL/preset icin zaten bekleyen bir is varsa yeni is
-        acilmaz; yeni durum mesaji mevcut ise baglanir. Yeni is eklendiyse True,
-        mevcut ise baglandiysa False doner.
+        Ayni kullanici ayni sohbette ayni URL/preset icin zaten bir is varsa
+        yeni is acilmaz ve yeni durum mesaji baglanmaz. Yeni is eklendiyse True,
+        is zaten varsa False doner.
         """
-        key = (job.user_id, job.url, job.cache_preset)
+        key = (job.user_id, job.chat_id, job.url, job.cache_preset)
         existing = self._jobs.get(key)
-        if existing is not None and existing is not job and not existing.sending:
-            existing.extra_targets.append((job.chat_id, job.status_message_id))
+        if existing is not None and existing is not job:
             log.info(
-                "Ayni ise baglandi: kullanici=%s url=%s preset=%s",
+                "Ayni is zaten var, yeni is acilmadi: kullanici=%s sohbet=%s url=%s preset=%s",
                 job.user_id,
+                job.chat_id,
                 job.url,
                 job.preset,
             )
@@ -206,7 +217,7 @@ class JobQueue:
             except Exception:  # noqa: BLE001
                 log.exception("Isci %s beklenmeyen hata: %s", index, job.url)
             finally:
-                key = (job.user_id, job.url, job.cache_preset)
+                key = (job.user_id, job.chat_id, job.url, job.cache_preset)
                 if self._jobs.get(key) is job:
                     self._jobs.pop(key, None)
                 self._active -= 1
@@ -225,7 +236,6 @@ class JobQueue:
                 job.url, job.cache_preset, self._settings.cache_days
             )
             if cached is not None:
-                job.sending = True
                 try:
                     await self._send_cached(job, cached)
                 except TelegramBadRequest as exc:
@@ -268,7 +278,6 @@ class JobQueue:
                 )
 
             await self._edit(job, f"📤 <b>Gönderiliyor…</b> ({human_size(size)})")
-            job.sending = True
             file_id, media_type = await self._send(job, path)
             if file_id and self._settings.cache_days:
                 try:
@@ -339,7 +348,6 @@ class JobQueue:
                     f"Gönderi {human_size(total)} boyutunda. Telegram limiti "
                     f"{self._settings.max_upload_mb} MB."
                 )
-            job.sending = True
             await self._send_gallery(job, files)
             await self._db.record_download(
                 job.user_id, job.url, job.platform, "gallery", "ok", total
@@ -599,12 +607,13 @@ class JobQueue:
 
     async def _progress_loop(self, job: Job, state: dict[str, Any]) -> None:
         while True:
-            await asyncio.sleep(4)
+            # Cok sik duzenleme Telegram flood limitine takilabilir.
+            await asyncio.sleep(8)
             with contextlib.suppress(Exception):
                 await self._edit(job, render_progress(state))
 
     def _targets(self, job: Job) -> list[tuple[int, int]]:
-        return [(job.chat_id, job.status_message_id), *job.extra_targets]
+        return [(job.chat_id, job.status_message_id)]
 
     def _retry_keyboard(self, job: Job) -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup(

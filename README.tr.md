@@ -17,8 +17,8 @@ ile yazıldı, Docker ile çalışacak şekilde hazırlandı.
 - 🎵 `mp3` / `ses` yazarak sadece ses indirme
 - 📄 `dosya` / `belge` / `file` / `fl` yazarak medyayı Telegram dosyası olarak gönderme
 - ⚡️ `file_id` önbelleği: aynı video tekrar istenirse yeniden indirilmeden anında gönderilir
-- 🧵 Aynı link indirilirken tekrar gönderilirse ikinci indirme açılmaz; yeni mesaj mevcut işe bağlanır
-- 🔁 Başarısız indirmelerde `Yeniden dene` butonu
+- 🧵 Aynı link indirilirken tekrar gönderilirse ikinci indirme veya durum mesajı açılmaz
+- 🔁 Başarısız indirmelerde `Yeniden dene` butonu; tekrar deneme mevcut hata mesajını düzenler
 - ⚙️ `/ayar` ile kişisel varsayılanlar: kalite, ses tercihi, caption
 - 🔘 Videoların altında `🔗 Kaynak` · `🎵 Ses olarak al` butonları
 - 📝 Medya açıklamasındaki (caption) ve yanıtlanan mesajdaki bağlantılar da işlenir
@@ -194,9 +194,11 @@ Aynı video ikinci kez istendiğinde `file_id` önbelleğinden **anında** gönd
 Gönderi açıklamasında (caption) link varsa veya linki bir mesajı yanıtlayarak
 gönderirsen de çalışır: gönderiyi yanıtla, sadece `720p` yaz.
 
-Aynı link indirilirken tekrar gönderilirse yeni iş açılmaz; yeni mesaj mevcut
-indirmeye bağlanır ve medya hazır olunca her iki sohbete de gönderilir. Başarısız
-işlerde hata mesajı `🔁 Yeniden dene` butonuyla birlikte kalır.
+Her istek tek bir durum mesajı kullanır: link incelenirken, indirilirken ve
+gönderilirken bu mesaj yerinde düzenlenir; medya gelince silinir. Aynı link
+indirilirken tekrar gönderilirse yeni iş veya yeni durum mesajı açılmaz.
+Başarısız işlerde mevcut hata mesajı `🔁 Yeniden dene` butonuyla kalır; tekrar
+deneme de aynı mesajı kullanır.
 
 `/ayar` ile kişisel varsayılanları kaydedebilirsin:
 
@@ -314,8 +316,10 @@ Test kendi verisini `.tmp/` altında oluşturur ve Telegram'a gerçek istek atma
 - Videolar geçici klasörde tutulur ve gönderimden sonra silinir; sunucuda birikmez.
   6 saatten eski artık dosyalar 30 dakikada bir çalışan temizlik göreviyle,
   takip edilen geçici klasörler ise kapanışta silinir.
-- Başarılı gönderimden sonra ilerleme/durum mesajı silinir; sohbette sadece
-  gönderilen medya kalır. Hata durumunda mesaj açıklama ve yeniden deneme
+- Tüm aşamalar tek bir durum mesajı düzenlenerek gösterilir; her aşama için yeni
+  mesaj gönderilmez. İlerleme düzenlemeleri Telegram flood limitine takılmamak
+  için seyreltilmiştir. Başarılı gönderimden sonra durum mesajı silinir; sohbette
+  sadece gönderilen medya kalır. Hata durumunda mesaj açıklama ve yeniden deneme
   butonuyla birlikte kalır.
 - Instagram fotoğraf/carousel gönderileri gallery-dl ile indirilir; video içeren
   gönderilerde kalite seçimi için yt-dlp kullanılır.

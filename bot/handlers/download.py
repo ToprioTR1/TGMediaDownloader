@@ -279,10 +279,17 @@ async def _process_text(
     gallery: GalleryDownloader,
     queue: JobQueue,
     only_url: str | None = None,
+    existing_status: Message | None = None,
 ) -> None:
     error = await _limit_error(user_id, db, settings, queue)
     if error:
-        await bot.send_message(chat_id, error)
+        if existing_status is not None:
+            with suppress(TelegramBadRequest):
+                await existing_status.edit_text(
+                    f"❌ {escape(error)}", reply_markup=None
+                )
+        else:
+            await bot.send_message(chat_id, error)
         return
 
     user = await db.get_user(user_id) or {}
@@ -291,12 +298,23 @@ async def _process_text(
     as_document = wants_document(text)
 
     urls = [only_url] if only_url else extract_urls(text)
+    reuse_status = existing_status
     for url in urls:
+        if reuse_status is not None:
+            status = reuse_status
+            reuse_status = None
+            with suppress(TelegramBadRequest):
+                await status.edit_text("🔎 Bağlantı inceleniyor…", reply_markup=None)
+        else:
+            status = await bot.send_message(chat_id, "🔎 Bağlantı inceleniyor…")
+
         if is_blocked_host(url):
-            await bot.send_message(chat_id, "🚫 Bu bağlantı güvenlik nedeniyle işlenemiyor.")
+            with suppress(TelegramBadRequest):
+                await status.edit_text(
+                    "🚫 Bu bağlantı güvenlik nedeniyle işlenemiyor."
+                )
             continue
 
-        status = await bot.send_message(chat_id, "🔎 Bağlantı inceleniyor…")
         info: MediaInfo | None = None
         gallery_items: list[dict] | None = None
 
@@ -364,10 +382,9 @@ async def _process_text(
                     await status.edit_text(f"❌ {escape(str(exc))}")
                 continue
             if not queued:
+                # Ayni is zaten suruyor: fazladan durum mesaji birakma.
                 with suppress(TelegramBadRequest):
-                    await status.edit_text(
-                        "⏳ Bu gönderi zaten indiriliyor; bitince buraya da gönderilecek."
-                    )
+                    await status.delete()
             continue
 
         assert info is not None  # bu noktada her zaman dolu (yukarida kontrol edildi)
@@ -418,10 +435,9 @@ async def _process_text(
                 await status.edit_text(f"❌ {escape(str(exc))}")
             continue
         if not queued:
+            # Ayni is zaten suruyor: fazladan durum mesaji birakma.
             with suppress(TelegramBadRequest):
-                await status.edit_text(
-                    "⏳ Bu bağlantı zaten indiriliyor; bitince buraya da gönderilecek."
-                )
+                await status.delete()
 
         log.info(
             "Kuyruga eklendi: kullanici=%s platform=%s hedef=%s secilen=%s preset=%s",
@@ -462,8 +478,6 @@ async def on_retry_text(
         await callback.answer("Bu buton bu sohbete ait değil.", show_alert=True)
         return
 
-    with suppress(TelegramBadRequest):
-        await callback.message.edit_reply_markup(reply_markup=None)
     await callback.answer("Yeniden denendi 🔁")
     await _process_text(
         callback.bot,
@@ -476,6 +490,7 @@ async def on_retry_text(
         gallery=gallery,
         queue=queue,
         only_url=url,
+        existing_status=callback.message,
     )
 
 
@@ -486,15 +501,15 @@ async def on_retry(callback: CallbackQuery, queue: JobQueue) -> None:
         return
 
     job_id = (callback.data or "").split("|", 1)[1]
-    if not await queue.retry(job_id, callback.message.chat.id):
+    if not await queue.retry(
+        job_id, callback.message.chat.id, callback.message.message_id
+    ):
         await callback.answer(
             "Bu iş artık yeniden denenemiyor. Linki tekrar gönderin.",
             show_alert=True,
         )
         return
 
-    with suppress(TelegramBadRequest):
-        await callback.message.edit_reply_markup(reply_markup=None)
     await callback.answer("Yeniden denendi 🔁")
 
 
@@ -584,6 +599,9 @@ async def on_action(
         except QueueFullError as exc:
             await callback.answer(str(exc), show_alert=True)
             return
+        if not queued:
+            with suppress(TelegramBadRequest):
+                await status.delete()
         await callback.answer(
             "Sıraya alındı 🎵" if queued else "Bu içerik zaten indiriliyor ⏳"
         )

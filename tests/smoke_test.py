@@ -382,6 +382,11 @@ async def main() -> int:
             ),
             "tekrar gonder butonu hala ekleniyor",
         )
+        status_sends = [c for c in bot.calls[mark:] if c[0] == "send_message"]
+        check(
+            len(status_sends) == 1,
+            f"tek durum mesaji bekleniyordu, {len(status_sends)} mesaj gonderildi",
+        )
         print(f"2) varsayilan kalite OK: TikTok {settings.quality_tiktok}p -> {tiktok_height}p")
 
         # 3) "1280p" yazili link -> en yakin kalite
@@ -630,7 +635,7 @@ async def main() -> int:
             object.__setattr__(settings, "daily_limit", original_daily)
         print("17) promote + demote OK")
 
-        # 18) ayni link tekrar kuyruga alinmaz, mevcut ise baglanir
+        # 18) ayni link tekrar kuyruga alinmaz, fazladan mesaj acilmaz
         q2 = JobQueue(bot, db, settings, downloader, gallery)
         j1 = Job(
             id="dedup1",
@@ -655,21 +660,20 @@ async def main() -> int:
         check(await q2.submit(j1) is True, "ilk is kuyruga alinmadi")
         check(await q2.submit(j2) is False, "ayni is tekrar kuyruga alindi")
         check(
-            (ADMIN.id, 9002) in j1.extra_targets,
-            "ikinci durum mesaji mevcut ise baglanmadi",
+            q2._jobs.get((ADMIN.id, ADMIN.id, j1.url, j1.preset)) is j1,
+            "ayni is mevcut isi ezdi",
         )
-        j1.sending = True
         j3 = Job(
             id="dedup3",
             user_id=ADMIN.id,
-            chat_id=ADMIN.id,
+            chat_id=777,
             status_message_id=9003,
             url="https://example.com/video",
             preset="h:720",
             title="Test",
             platform="Test",
         )
-        check(await q2.submit(j3) is True, "gonderim sirasinda yeni is acilmadi")
+        check(await q2.submit(j3) is True, "farkli sohbette yeni is acilmadi")
         await q2.stop()
         print("18) ayni link dedup OK")
 
@@ -687,14 +691,29 @@ async def main() -> int:
         )
         q3._remember_retry(failed)
         mark = len(bot.calls)
-        check(await q3.retry("fail1", ADMIN.id) is True, "retry kuyruga alinmadi")
         check(
-            any("Yeniden deneniyor" in t for t in bot.texts_since(mark)),
-            "retry durum mesaji yok",
+            await q3.retry("fail1", ADMIN.id, 9010) is True,
+            "retry kuyruga alinmadi",
         )
-        retry_job = q3._jobs.get((ADMIN.id, failed.url, failed.preset))
+        check(
+            any(
+                "Yeniden deneniyor" in t
+                for t in bot.texts_since(mark, "edit_message_text")
+            ),
+            "retry mevcut mesaji duzenlemedi",
+        )
+        check(
+            not any(
+                "Yeniden deneniyor" in t for t in bot.texts_since(mark)
+            ),
+            "retry yeni mesaj gonderdi",
+        )
+        retry_job = q3._jobs.get((ADMIN.id, ADMIN.id, failed.url, failed.preset))
         check(retry_job is not None and retry_job.id != "fail1", "retry isi olusmadi")
-        check(await q3.retry("fail1", ADMIN.id) is False, "ayni retry iki kez calisti")
+        check(
+            await q3.retry("fail1", ADMIN.id, 9010) is False,
+            "ayni retry iki kez calisti",
+        )
         await q3.stop()
         print("19) yeniden dene OK")
 
@@ -817,8 +836,17 @@ async def main() -> int:
             mark = len(bot.calls)
             await dp.feed_update(bot, callback_update(cb_data, fake_status))
             check(
-                any("inceleniyor" in t for t in bot.texts_since(mark)),
-                "kesif retry yeniden denemedi",
+                any(
+                    c[0] == "edit_message_text"
+                    and c[1].get("message_id") == 9500
+                    and "inceleniyor" in (c[1].get("text") or "")
+                    for c in bot.calls[mark:]
+                ),
+                "kesif retry mevcut mesaji duzenlemedi",
+            )
+            check(
+                not any("inceleniyor" in t for t in bot.texts_since(mark)),
+                "kesif retry yeni mesaj gonderdi",
             )
             check(
                 any(

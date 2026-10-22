@@ -20,9 +20,10 @@ Built with Python 3.12 + [aiogram 3](https://github.com/aiogram/aiogram) +
 - 🎵 Audio only with `mp3` / `ses` (`ses` is Turkish for "audio")
 - 📄 Send as a file with `dosya` / `belge` / `file` / `fl`
 - ⚡️ `file_id` cache: requesting the same video again sends it instantly without re-downloading
-- 🧵 Duplicate links: sending the same link while it is still downloading attaches
-  to the existing job instead of starting a second download
-- 🔁 Retry button on failed downloads
+- 🧵 Duplicate links: sending the same link while it is still downloading is
+  ignored, so no second download or status message is created
+- 🔁 Retry button on failed downloads; retrying edits the existing error message
+  instead of sending a new one
 - ⚙️ Per-user defaults via `/ayar`: target quality, audio-only links, captions
 - 🔘 `🔗 Source` · `🎵 Get audio` buttons under videos
 - 📝 Links in media captions and in replied-to messages are processed too
@@ -203,10 +204,11 @@ Requesting the same video a second time sends it **instantly** from the
 `file_id` cache. It also works when the link is in a post caption or when you
 reply to a message with a link: reply to the post and just type `720p`.
 
-If the same link is sent again while it is still queued or downloading, the new
-message attaches to the existing job; the media is sent to every attached chat
-when it is ready. Failed jobs keep the error message and show a
-`🔁 Yeniden dene` (retry) button.
+Each request uses a single status message: it is edited in place while the link
+is probed, downloaded and sent, then deleted after the media arrives. If the
+same link is sent again while it is still queued or downloading, no second job
+or status message is created. Failed jobs keep their existing message and show
+a `🔁 Yeniden dene` (retry) button; retrying reuses that same message.
 
 Use `/ayar` to save personal defaults:
 
@@ -327,7 +329,9 @@ Telegram.
   not accumulate on the server. Leftover files older than 6 hours are removed by
   a janitor every 30 minutes, and tracked temporary directories are removed on
   graceful shutdown.
-- After a successful send, the progress/status message is deleted; only the
+- All stages are shown by editing one status message, not by sending a new
+  message for each stage. Progress edits are throttled to avoid Telegram flood
+  limits. After a successful send, the status message is deleted; only the
   delivered media remains in the chat. On error, the message stays with an
   explanation and a retry button.
 - Instagram photo/carousel posts are downloaded with gallery-dl; for posts that
