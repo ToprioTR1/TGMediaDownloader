@@ -315,15 +315,31 @@ async def main() -> int:
         # 0) yardimci fonksiyonlar
         check(parse_quality("link 1080p") == 1080, "1080p okunamadi")
         check(parse_quality("link 720 p") == 720, "720 p okunamadi")
+        check(parse_quality("link 1920") == 1920, "1920 okunamadi")
+        check(parse_quality("link 1920p") == 1920, "1920p okunamadi")
+        check(parse_quality("link 1920 p") == 1920, "1920 p okunamadi")
         check(parse_quality("link 4k") == 2160, "4k okunamadi")
         check(parse_quality("link") is None, "kalite olmadan deger dondu")
+        check(
+            parse_quality("https://example.com/video/1920") is None,
+            "URL icindeki sayi kalite sayildi",
+        )
         check(nearest_height([1280, 720], 1080) == 1280, "en yakin kalite yanlis")
         check(nearest_height([1920, 1280, 1024], 1012) == 1024, "tiktok varsayilani yanlis")
-        check(wants_document("link dosya") and wants_document("link file"), "dosya ipucu okunamadi")
+        check(
+            wants_document("link dosya")
+            and wants_document("link file")
+            and wants_document("link fl"),
+            "dosya ipucu okunamadi",
+        )
         check(not wants_document("link 720p"), "dosya olmayan metin dosya sayildi")
         check(
             not wants_document("https://example.com/file/123"),
             "URL icindeki file dosya ipucu sayildi",
+        )
+        check(
+            not wants_document("https://example.com/fl/123"),
+            "URL icindeki fl dosya ipucu sayildi",
         )
         check(settings.default_height_for("Instagram") == 1280, "instagram varsayilani")
         check(settings.default_height_for("TikTok") == 1012, "tiktok varsayilani")

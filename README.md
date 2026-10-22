@@ -18,7 +18,7 @@ Built with Python 3.12 + [aiogram 3](https://github.com/aiogram/aiogram) +
 - 📦 Size guard: if the selected quality would exceed `MAX_UPLOAD_MB`, it automatically
   steps down to the next lower quality
 - 🎵 Audio only with `mp3` / `ses` (`ses` is Turkish for "audio")
-- 📄 Send as a file with `dosya` / `belge` / `file`
+- 📄 Send as a file with `dosya` / `belge` / `file` / `fl`
 - ⚡️ `file_id` cache: requesting the same video again sends it instantly without re-downloading
 - 🧵 Duplicate links: sending the same link while it is still downloading attaches
   to the existing job instead of starting a second download
@@ -230,7 +230,10 @@ audio-only mode enabled, write `720p` (or another quality) to request video.
 | `https://... 720p` | Nearest available quality to 720p |
 | `https://... 4k` | Nearest available quality to 4K (2160p) |
 | `https://... mp3` | Audio only (MP3 192 kbps) |
-| `https://... dosya` | Send the downloaded media as a Telegram document |
+| `https://... dosya` | Send the downloaded media as a Telegram document (`dosya`, `belge`, `file`, `fl`) |
+
+The quality suffix can be written as `1080`, `1080p` or `1080 p`; all three are
+equivalent.
 
 Defaults can be changed with the `QUALITY_*` variables in `.env` or per user with
 `/ayar`. If the estimated size of the selected quality exceeds `MAX_UPLOAD_MB`,

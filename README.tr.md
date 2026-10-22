@@ -15,7 +15,7 @@ ile yazıldı, Docker ile çalışacak şekilde hazırlandı.
   yazmazsan platform varsayılanı (Instagram 1280p, TikTok 1012p, YouTube 720p)
 - 📦 Boyut koruması: seçilen kalite `MAX_UPLOAD_MB` limitini aşacaksa otomatik bir alt kaliteye iner
 - 🎵 `mp3` / `ses` yazarak sadece ses indirme
-- 📄 `dosya` / `belge` / `file` yazarak medyayı Telegram dosyası olarak gönderme
+- 📄 `dosya` / `belge` / `file` / `fl` yazarak medyayı Telegram dosyası olarak gönderme
 - ⚡️ `file_id` önbelleği: aynı video tekrar istenirse yeniden indirilmeden anında gönderilir
 - 🧵 Aynı link indirilirken tekrar gönderilirse ikinci indirme açılmaz; yeni mesaj mevcut işe bağlanır
 - 🔁 Başarısız indirmelerde `Yeniden dene` butonu
@@ -220,7 +220,9 @@ açıkken video istemek için linkin sonuna `720p` gibi bir kalite yaz.
 | `https://... 720p` | 720p'ye en yakın mevcut kalite |
 | `https://... 4k` | 4K (2160p) en yakın kalite |
 | `https://... mp3` | Sadece ses (MP3 192 kbps) |
-| `https://... dosya` | İndirilen medyayı Telegram dosyası olarak gönder |
+| `https://... dosya` | İndirilen medyayı Telegram dosyası olarak gönder (`dosya`, `belge`, `file`, `fl`) |
+
+Kalite eki `1080`, `1080p` veya `1080 p` şeklinde yazılabilir; üçü de aynıdır.
 
 Varsayılanlar `.env` içindeki `QUALITY_*` değişkenleriyle veya kullanıcı bazında
 `/ayar` ile değiştirilebilir. Seçilen kalitenin tahmini boyutu `MAX_UPLOAD_MB`

@@ -9,10 +9,10 @@ import re
 from urllib.parse import urlparse
 
 URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
-QUALITY_RE = re.compile(r"(?<![\d.])(\d{3,4})\s*[pP](?![a-zA-Z0-9])")
+QUALITY_RE = re.compile(r"(?<![\d.])(\d{3,4})(?:\s*[pP])?(?![\d.])")
 K_QUALITY = {"8k": 4320, "4k": 2160, "2k": 1440}
 AUDIO_RE = re.compile(r"\b(mp3|m4a|ses|audio|müzik|muzik)\b", re.IGNORECASE)
-DOCUMENT_RE = re.compile(r"\b(dosya|belge|file)\b", re.IGNORECASE)
+DOCUMENT_RE = re.compile(r"\b(dosya|belge|file|fl)\b", re.IGNORECASE)
 
 PLATFORM_NAMES = {
     "youtube": "YouTube",
@@ -52,13 +52,14 @@ def extract_urls(text: str, limit: int = 3) -> list[str]:
 
 
 def parse_quality(text: str) -> int | None:
-    """Metinden istenen cozunurlugu cikarir: '1080p', '1080 p', '4k' ..."""
+    """Metinden istenen cozunurlugu cikarir: '1080', '1080p', '1080 p', '4k' ..."""
     if not text:
         return None
-    match = QUALITY_RE.search(text)
+    cleaned = _without_urls(text)
+    match = QUALITY_RE.search(cleaned)
     if match:
         return int(match.group(1))
-    lowered = text.lower()
+    lowered = cleaned.lower()
     for key, value in K_QUALITY.items():
         if re.search(rf"\b{key}\b", lowered):
             return value
@@ -76,7 +77,7 @@ def wants_audio(text: str) -> bool:
 
 
 def wants_document(text: str) -> bool:
-    """Kullanici medyayi dosya olarak istiyor mu ('dosya', 'file' ...)."""
+    """Kullanici medyayi dosya olarak istiyor mu ('dosya', 'file', 'fl' ...)."""
     return bool(DOCUMENT_RE.search(_without_urls(text)))
 
 
