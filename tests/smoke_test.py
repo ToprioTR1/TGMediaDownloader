@@ -53,6 +53,7 @@ from bot.handlers.download import (  # noqa: E402
     SizeLimitError,
     _gallery_title,
     _gallery_url,
+    _limit_error,
     _needs_gallery,
     _resolve_preset,
 )
@@ -62,6 +63,7 @@ from bot.utils import nearest_height, parse_quality  # noqa: E402
 
 URL = "https://www.tiktok.com/@tiktok/video/7106594312292453675"
 ADMIN = User(id=42, is_bot=False, first_name="Ali", username="alitoprak")
+OTHER = User(id=43, is_bot=False, first_name="Baskasi", username="biri")
 
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
 
@@ -538,8 +540,61 @@ async def main() -> int:
             download._last_request.pop(ADMIN.id, None)
         print("16) cooldown OK")
 
+        # 17) promote / demote (sinirsiz gunluk hak)
+        await dp.feed_update(bot, msg_update("/start", 20, user=OTHER))  # kullanici kaydi
+
+        mark = len(bot.calls)
+        await dp.feed_update(bot, msg_update("/promote @alitoprak", 21, user=OTHER))
+        check(not await db.is_promoted(ADMIN.id), "admin olmayan promote etti")
+        check(not bot.texts_since(mark), "admin olmayan kullaniciya cevap verildi")
+
+        mark = len(bot.calls)
+        await dp.feed_update(bot, msg_update("/promote @BIRI", 22))
+        texts = bot.texts_since(mark)
+        check(any("sınırsız" in t.lower() for t in texts), "promote calismadi")
+        check(any("@biri" in t for t in texts), "promote mesajinda kullanici adi yok")
+        check(await db.is_promoted(OTHER.id), "db promote kaydetmedi")
+
+        mark = len(bot.calls)
+        await dp.feed_update(bot, msg_update("/promote @olmayan", 23))
+        check(any("bulunamadı" in t for t in bot.texts_since(mark)), "olmayan kullanici")
+
+        await db.record_download(OTHER.id, "test", "Test", "h:720", "ok", 100)
+        original_daily = settings.daily_limit
+        object.__setattr__(settings, "daily_limit", 1)
+        try:
+            check(
+                await _limit_error(OTHER.id, db, settings, queue) is None,
+                "promote gunluk limiti kaldirmadi",
+            )
+            err = await _limit_error(ADMIN.id, db, settings, queue)
+            check(err is not None and "limit" in err.lower(), "limitsiz kullanici engellenmedi")
+
+            mark = len(bot.calls)
+            await dp.feed_update(bot, msg_update("/me", 24, user=OTHER))
+            check(
+                any("Sınırsız indirme hakkı" in t for t in bot.texts_since(mark)),
+                "/me sinirsiz hakki gostermedi",
+            )
+
+            mark = len(bot.calls)
+            await dp.feed_update(bot, msg_update("/users", 25))
+            check(any("⭐" in t for t in bot.texts_since(mark)), "/users yildiz gostermedi")
+
+            mark = len(bot.calls)
+            await dp.feed_update(bot, msg_update("/demote https://t.me/biri", 26))
+            check(any("kaldırıldı" in t for t in bot.texts_since(mark)), "demote calismadi")
+            check(not await db.is_promoted(OTHER.id), "db demote kaydetmedi")
+            check(
+                await _limit_error(OTHER.id, db, settings, queue) is not None,
+                "demote sonrasi limit geri gelmedi",
+            )
+        finally:
+            object.__setattr__(settings, "daily_limit", original_daily)
+        print("17) promote + demote OK")
+
         stats = await db.stats()
-        print("17) istatistikler:", stats)
+        print("18) istatistikler:", stats)
     except AssertionError as exc:
         print("HATA:", exc)
         return 1

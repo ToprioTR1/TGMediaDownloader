@@ -143,7 +143,7 @@ async def _limit_error(
 ) -> str | None:
     if queue.pending_for(user_id) >= settings.max_queue_per_user:
         return "🧵 Kuyruğunuz dolu. Mevcut indirmeler bitince tekrar deneyin."
-    if settings.daily_limit:
+    if settings.daily_limit and not await db.is_promoted(user_id):
         used = await db.count_downloads_today(user_id)
         if used >= settings.daily_limit:
             return (

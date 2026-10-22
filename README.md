@@ -20,6 +20,7 @@ ile yazıldı, Docker ile çalışacak şekilde hazırlandı.
 - 🧵 Kuyruk sistemi: aynı anda N indirme, kullanıcı başına kuyruk limiti
 - ⏱ İlerleme mesajı (yüzde, hız, kalan süre)
 - 📉 Günlük indirme limiti ve spam koruması (cooldown)
+- ⭐ Yetki yükseltme: `/promote @kullanıcıadı` ile kullanıcının günlük limiti kaldırılır (`/demote` ile geri alınır)
 - 👤 Kullanıcı kaydı, indirme istatistikleri (SQLite)
 - 🛠 Admin paneli: `/stats`, `/users`, `/broadcast`
 - 🍪 Instagram/TikTok için `cookies.txt` desteği
@@ -210,8 +211,19 @@ Bir mesajda en fazla 3 bağlantı işlenir.
 | `/me` | herkes | Kendi kullanım istatistikleri |
 | `/admin` | admin | Butonlu admin paneli |
 | `/stats` | admin | Kullanıcı/indirme istatistikleri |
-| `/users` | admin | Son 10 kullanıcı |
+| `/users` | admin | Son 10 kullanıcı (`⭐` = sınırsız hak) |
 | `/broadcast <mesaj>` | admin | Herkese duyuru |
+| `/promote @kullanıcıadı` | admin | Kullanıcıya sınırsız günlük indirme hakkı ver (mesaja yanıt da olur) |
+| `/demote @kullanıcıadı` | admin | Sınırsız hakkı geri al |
+
+`/promote` ile yetkilendirilen kullanıcıya günlük indirme limiti uygulanmaz.
+Hak, `/demote` yazılana kadar geçerlidir. Kullanıcı `/me` çıktısında
+`⭐ Sınırsız indirme hakkı: aktif` satırını görür.
+
+Kullanıcı adıyla yetkilendirme için kullanıcının bota en az bir kez yazmış
+olması gerekir (botun kullanıcı adından ID çözebilmesi için). Alternatif olarak
+kullanıcının mesajına yanıt verip `/promote` yazabilirsiniz. `t.me/kullaniciadi`
+biçimi ve büyük/küçük harf farkı da desteklenir.
 
 ## Proje Yapısı
 
@@ -229,7 +241,7 @@ bot/
 └── handlers/
     ├── start.py     # /start /help /me
     ├── download.py  # link/caption/yanıt → kalite + boyut çözümleme → kuyruk
-    └── admin.py     # admin komutları
+    └── admin.py     # admin komutları (promote/demote dahil)
 ```
 
 Akış: `handlers/download.py` → `downloader.probe()` → `utils.nearest_height()`

@@ -112,12 +112,22 @@ def _help_text(settings: Settings) -> str:
     )
 
 
+def _promoted_line(promoted: bool) -> str:
+    return "\n⭐ Sınırsız indirme hakkı: aktif" if promoted else ""
+
+
 @router.message(Command("me", "profil", "limit"))
 async def cmd_me(message: Message, db: Database, db_user: dict, settings: Settings) -> None:
     today = await db.count_downloads_today(message.from_user.id)
     user = await db.get_user(message.from_user.id) or db_user
+    promoted = bool(user.get("is_promoted"))
     daily = settings.daily_limit or 0
-    left = "sınırsız" if not daily else str(max(0, daily - today))
+    if promoted:
+        left = "sınırsız (yetkili)"
+    elif not daily:
+        left = "sınırsız"
+    else:
+        left = str(max(0, daily - today))
     await message.answer(
         "<b>📊 Kullanım bilgileriniz</b>\n"
         f"👤 Ad: {escape(user.get('first_name'))}\n"
@@ -125,6 +135,7 @@ async def cmd_me(message: Message, db: Database, db_user: dict, settings: Settin
         f"⬇️ Toplam indirme: {user.get('downloads', 0)}\n"
         f"💾 Toplam veri: {human_size(user.get('bytes_sent', 0))}\n"
         f"📅 Bugün: {today} • kalan hak: {left}"
+        f"{_promoted_line(promoted)}"
     )
 
 
@@ -132,8 +143,14 @@ async def cmd_me(message: Message, db: Database, db_user: dict, settings: Settin
 async def cb_usage(callback: CallbackQuery, db: Database, settings: Settings) -> None:
     today = await db.count_downloads_today(callback.from_user.id)
     user = await db.get_user(callback.from_user.id) or {}
+    promoted = bool(user.get("is_promoted"))
     daily = settings.daily_limit or 0
-    left = "sınırsız" if not daily else str(max(0, daily - today))
+    if promoted:
+        left = "sınırsız (yetkili)"
+    elif not daily:
+        left = "sınırsız"
+    else:
+        left = str(max(0, daily - today))
     await callback.answer()
     if callback.message:
         await callback.message.answer(
@@ -141,4 +158,5 @@ async def cb_usage(callback: CallbackQuery, db: Database, settings: Settings) ->
             f"⬇️ Toplam indirme: {user.get('downloads', 0)}\n"
             f"💾 Toplam veri: {human_size(user.get('bytes_sent', 0))}\n"
             f"📅 Bugün: {today} • kalan hak: {left}"
+            f"{_promoted_line(promoted)}"
         )

@@ -18,7 +18,8 @@ CREATE TABLE IF NOT EXISTS users (
     first_seen  TEXT NOT NULL DEFAULT (datetime('now')),
     last_seen   TEXT NOT NULL DEFAULT (datetime('now')),
     downloads   INTEGER NOT NULL DEFAULT 0,
-    bytes_sent  INTEGER NOT NULL DEFAULT 0
+    bytes_sent  INTEGER NOT NULL DEFAULT 0,
+    is_promoted INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS downloads (
@@ -71,8 +72,19 @@ class Database:
         await self._conn.execute("PRAGMA journal_mode=WAL")
         await self._conn.execute("PRAGMA synchronous=NORMAL")
         await self._conn.executescript(SCHEMA)
+        await self._migrate()
         await self._conn.commit()
         log.info("Veritabani hazir: %s", self._path)
+
+    async def _migrate(self) -> None:
+        """Eski veritabanlarina yeni kolonlari ekler."""
+        async with self.conn.execute("PRAGMA table_info(users)") as cur:
+            columns = {row["name"] for row in await cur.fetchall()}
+        if "is_promoted" not in columns:
+            await self.conn.execute(
+                "ALTER TABLE users ADD COLUMN is_promoted INTEGER NOT NULL DEFAULT 0"
+            )
+            log.info("users.is_promoted kolonu eklendi")
 
     async def close(self) -> None:
         if self._conn is not None:
@@ -103,6 +115,15 @@ class Database:
             row = await cur.fetchone()
         return dict(row) if row else None
 
+    async def get_user_by_username(self, username: str) -> dict[str, Any] | None:
+        """Kullanici adini buyuk/kucuk harf duyarsiz arar (@ oneki olmadan)."""
+        async with self.conn.execute(
+            "SELECT * FROM users WHERE username = ? COLLATE NOCASE LIMIT 1",
+            (username,),
+        ) as cur:
+            row = await cur.fetchone()
+        return dict(row) if row else None
+
     async def all_user_ids(self) -> list[int]:
         async with self.conn.execute("SELECT id FROM users") as cur:
             rows = await cur.fetchall()
@@ -114,6 +135,21 @@ class Database:
         ) as cur:
             rows = await cur.fetchall()
         return [dict(row) for row in rows]
+
+    async def set_promoted(self, user_id: int, promoted: bool) -> bool:
+        cur = await self.conn.execute(
+            "UPDATE users SET is_promoted = ? WHERE id = ?",
+            (1 if promoted else 0, user_id),
+        )
+        await self.conn.commit()
+        return cur.rowcount > 0
+
+    async def is_promoted(self, user_id: int) -> bool:
+        async with self.conn.execute(
+            "SELECT is_promoted FROM users WHERE id = ?", (user_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        return bool(row["is_promoted"]) if row else False
 
     # ---------------------------------------------------------------- indirmeler
 

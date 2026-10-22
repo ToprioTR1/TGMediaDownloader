@@ -1,4 +1,4 @@
-"""Admin komutlari: istatistik, kullanicilar, yayin."""
+"""Admin komutlari: istatistik, kullanicilar, yayin, yetki yukseltme."""
 
 from __future__ import annotations
 
@@ -54,7 +54,9 @@ async def cmd_admin(message: Message) -> None:
         "Komutlar:\n"
         "/stats — istatistikler\n"
         "/users — son kullanıcılar\n"
-        "/broadcast &lt;mesaj&gt; — herkese duyuru",
+        "/broadcast &lt;mesaj&gt; — herkese duyuru\n"
+        "/promote @kullanıcıadı — sınırsız günlük indirme hakkı ver\n"
+        "/demote @kullanıcıadı — sınırsız hakkı geri al",
         reply_markup=admin_keyboard(),
     )
 
@@ -75,9 +77,10 @@ async def cmd_users(message: Message, db: Database) -> None:
     for user in users:
         name = escape(user.get("first_name") or "?")
         username = f" (@{escape(user['username'])})" if user.get("username") else ""
+        star = " ⭐" if user.get("is_promoted") else ""
         lines.append(
             f"• {name}{username} — <code>{user['id']}</code> — "
-            f"{user.get('downloads', 0)} indirme"
+            f"{user.get('downloads', 0)} indirme{star}"
         )
     await message.answer("\n".join(lines))
 
@@ -125,6 +128,107 @@ async def cmd_broadcast(message: Message, db: Database) -> None:
         )
 
 
+def _username_arg(message: Message) -> str | None:
+    """Mesajdan @kullaniciadi / t.me/kullaniciadi degerini cikarir."""
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        return None
+
+    raw = parts[1].strip()
+    for prefix in ("https://", "http://"):
+        if raw.lower().startswith(prefix):
+            raw = raw[len(prefix) :]
+    for prefix in ("www.t.me/", "t.me/", "telegram.me/"):
+        if raw.lower().startswith(prefix):
+            raw = raw[len(prefix) :]
+            break
+    raw = raw.split("?")[0].strip("/").strip()
+    if raw.startswith("@"):
+        raw = raw[1:]
+    return raw or None
+
+
+def _has_target(message: Message) -> bool:
+    return bool(
+        (message.reply_to_message and message.reply_to_message.from_user)
+        or _username_arg(message)
+    )
+
+
+async def _resolve_target(message: Message, db: Database) -> dict[str, Any] | None:
+    if message.reply_to_message and message.reply_to_message.from_user:
+        return await db.get_user(message.reply_to_message.from_user.id)
+    username = _username_arg(message)
+    if username is None:
+        return None
+    return await db.get_user_by_username(username)
+
+
+def _display_user(user: dict[str, Any]) -> str:
+    if user.get("username"):
+        return f"@{escape(user['username'])}"
+    return f"<code>{user['id']}</code>"
+
+
+@router.message(Command("promote"), IsAdmin())
+async def cmd_promote(message: Message, db: Database) -> None:
+    if not _has_target(message):
+        await message.answer(
+            "Kullanım: <code>/promote @kullanıcıadı</code> "
+            "veya bir mesaja yanıt verin.\n"
+            "Örnek: <code>/promote @mamiiblt</code>"
+        )
+        return
+
+    target = await _resolve_target(message, db)
+    if target is None:
+        await message.answer(
+            "Kullanıcı bulunamadı. Kullanıcı adını kontrol edin; "
+            "kullanıcı bota en az bir kez yazmış olmalı."
+        )
+        return
+
+    await db.set_promoted(target["id"], True)
+    await message.answer(
+        f"⭐ {_display_user(target)} artık <b>sınırsız günlük indirme</b> hakkına sahip."
+    )
+    with suppress(Exception):
+        await message.bot.send_message(
+            target["id"],
+            "⭐ <b>Sınırsız indirme hakkı tanımlandı!</b>\n"
+            "Artık günlük indirme limiti sizin için uygulanmıyor.",
+        )
+
+
+@router.message(Command("demote"), IsAdmin())
+async def cmd_demote(message: Message, db: Database) -> None:
+    if not _has_target(message):
+        await message.answer(
+            "Kullanım: <code>/demote @kullanıcıadı</code> "
+            "veya bir mesaja yanıt verin.\n"
+            "Örnek: <code>/demote @mamiiblt</code>"
+        )
+        return
+
+    target = await _resolve_target(message, db)
+    if target is None:
+        await message.answer(
+            "Kullanıcı bulunamadı. Kullanıcı adını kontrol edin; "
+            "kullanıcı bota en az bir kez yazmış olmalı."
+        )
+        return
+
+    await db.set_promoted(target["id"], False)
+    await message.answer(
+        f"↩️ {_display_user(target)} için sınırsız hak kaldırıldı; normal limit geçerli."
+    )
+    with suppress(Exception):
+        await message.bot.send_message(
+            target["id"],
+            "ℹ️ Sınırsız indirme hakkınız kaldırıldı. Günlük limit yeniden geçerli.",
+        )
+
+
 @router.callback_query(IsAdmin(), lambda c: (c.data or "").startswith("admin|"))
 async def cb_admin(callback: CallbackQuery, db: Database, queue: JobQueue) -> None:
     action = (callback.data or "").split("|", 1)[1]
@@ -142,7 +246,11 @@ async def cb_admin(callback: CallbackQuery, db: Database, queue: JobQueue) -> No
         lines = ["<b>👥 Son 10 kullanıcı</b>"]
         for user in users:
             name = escape(user.get("first_name") or "?")
-            lines.append(f"• {name} — <code>{user['id']}</code> — {user.get('downloads', 0)}")
+            star = " ⭐" if user.get("is_promoted") else ""
+            lines.append(
+                f"• {name} — <code>{user['id']}</code> — "
+                f"{user.get('downloads', 0)} indirme{star}"
+            )
         if callback.message:
             with suppress(TelegramBadRequest):
                 await callback.message.answer("\n".join(lines))
