@@ -45,6 +45,7 @@ class Settings:
     api_url: str | None
     concurrency: int
     max_upload_mb: int
+    upload_timeout_sec: int
     max_height: int
     max_duration_sec: int
     max_queue_per_user: int
@@ -85,6 +86,7 @@ class Settings:
             api_url=_env_str("TELEGRAM_API_URL") or None,
             concurrency=max(1, _env_int("CONCURRENCY", 2)),
             max_upload_mb=max(1, _env_int("MAX_UPLOAD_MB", 50)),
+            upload_timeout_sec=max(30, _env_int("UPLOAD_TIMEOUT_SEC", 600)),
             max_height=max(0, _env_int("MAX_HEIGHT", 0)),
             max_duration_sec=max(0, _env_int("MAX_DURATION_SEC", 1800)),
             max_queue_per_user=max(1, _env_int("MAX_QUEUE_PER_USER", 3)),

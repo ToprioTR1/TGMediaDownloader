@@ -133,6 +133,7 @@ All settings are read from `.env` ([bot/config.py](bot/config.py)):
 | `ADMIN_IDS` | empty | Comma-separated admin IDs |
 | `CONCURRENCY` | `2` | Number of concurrent downloads |
 | `MAX_UPLOAD_MB` | `50` | Maximum size that can be sent to Telegram |
+| `UPLOAD_TIMEOUT_SEC` | `600` | Timeout for media upload requests (raise it for slow links or 2 GB local Bot API) |
 | `MAX_HEIGHT` | `0` | Hide resolutions above this from the format list (0 = unlimited) |
 | `MAX_DURATION_SEC` | `1800` | Maximum video duration (0 = unlimited) |
 | `MAX_QUEUE_PER_USER` | `3` | Pending jobs per user |
@@ -341,6 +342,10 @@ Telegram.
   errors use a small bounded backoff. After a successful send, the status
   message is deleted; only the delivered media remains in the chat. On error,
   the message stays with an explanation and a retry button.
+- Media uploads use `UPLOAD_TIMEOUT_SEC` (600 seconds by default). If Telegram
+  does not answer in time, the bot does **not** resend automatically, because the
+  file may already have arrived and a retry could duplicate it. Instead it shows
+  a "Gönderim yanıtı alınamadı" warning.
 - Instagram photo/carousel posts are downloaded with gallery-dl; for posts that
   contain video, yt-dlp is used for quality selection.
 - The `file_id` cache is stored in SQLite (`CACHE_DAYS`, 30 days by default).

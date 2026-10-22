@@ -19,6 +19,7 @@ from aiogram.enums import ParseMode
 from aiogram.exceptions import (
     TelegramBadRequest,
     TelegramForbiddenError,
+    TelegramNetworkError,
     TelegramRetryAfter,
 )
 from aiogram.types import (
@@ -325,6 +326,21 @@ class JobQueue:
                         job, "cached", "📤 Önbellekten gönderiliyor…"
                     )
                     await self._send_cached(job, cached)
+                except TelegramNetworkError as exc:
+                    log.warning(
+                        "Onbellek gonderim yaniti alinamadi (%s): %s", job.id, exc
+                    )
+                    size = int(cached["filesize"] or 0)
+                    await self._db.record_download(
+                        job.user_id,
+                        job.url,
+                        job.platform,
+                        job.preset,
+                        "unknown",
+                        size,
+                    )
+                    await self._delivery_uncertain(job)
+                    return
                 except TelegramBadRequest as exc:
                     log.info("Onbellek gecersiz, yeniden indirilecek (%s): %s", job.id, exc)
                     await self._db.cache_delete(cached["cache_key"])
@@ -345,6 +361,7 @@ class JobQueue:
         tmpdir = await self._mkdtemp(job)
         state: dict[str, Any] = {"status": "starting"}
         started = time.time()
+        size = 0
         ticker: asyncio.Task[None] | None = None
 
         try:
@@ -403,6 +420,16 @@ class JobQueue:
                 job.user_id, job.url, job.platform, job.preset, "error"
             )
             await self._fail(job, f"❌ {escape(str(exc))}")
+        except TelegramNetworkError as exc:
+            # Yukleme sirasinda zaman asimi: Telegram dosyayi almis olabilir.
+            # Yeniden gondermek videoyu iki kez dusurecegi icin otomatik denemeyiz.
+            await self._stop_ticker(ticker)
+            ticker = None
+            log.warning("Medya gonderim yaniti alinamadi (%s): %s", job.id, exc)
+            await self._db.record_download(
+                job.user_id, job.url, job.platform, job.preset, "unknown", size
+            )
+            await self._delivery_uncertain(job)
         except TelegramForbiddenError:
             log.warning("Kullanici botu engellemis: %s", job.user_id)
         except asyncio.CancelledError:
@@ -440,6 +467,7 @@ class JobQueue:
             return
 
         tmpdir = await self._mkdtemp(job)
+        total = 0
         try:
             await self._set_stage(job, "download", "🖼 <b>Medya indiriliyor…</b>")
             files = await asyncio.to_thread(self._gallery.download, job.url, tmpdir)
@@ -463,6 +491,12 @@ class JobQueue:
                 job.user_id, job.url, job.platform, "gallery", "error"
             )
             await self._fail(job, f"❌ {escape(str(exc))}")
+        except TelegramNetworkError as exc:
+            log.warning("Galeri gonderim yaniti alinamadi (%s): %s", job.id, exc)
+            await self._db.record_download(
+                job.user_id, job.url, job.platform, "gallery", "unknown", total
+            )
+            await self._delivery_uncertain(job)
         except TelegramForbiddenError:
             log.warning("Kullanici botu engellemis: %s", job.user_id)
         except Exception:  # noqa: BLE001
@@ -497,10 +531,15 @@ class JobQueue:
                         caption=caption,
                         reply_markup=keyboard,
                         supports_streaming=True,
+                        request_timeout=self._settings.upload_timeout_sec,
                     )
                 else:
                     await self._bot.send_photo(
-                        chat_id=chat_id, photo=file, caption=caption, reply_markup=keyboard
+                        chat_id=chat_id,
+                        photo=file,
+                        caption=caption,
+                        reply_markup=keyboard,
+                        request_timeout=self._settings.upload_timeout_sec,
                     )
             return
 
@@ -521,7 +560,11 @@ class JobQueue:
                             media=file, caption=item_caption, parse_mode=ParseMode.HTML
                         )
                     )
-            await self._bot.send_media_group(chat_id=chat_id, media=media)
+            await self._bot.send_media_group(
+                chat_id=chat_id,
+                media=media,
+                request_timeout=self._settings.upload_timeout_sec,
+            )
 
     # ------------------------------------------------------------- gonderim
 
@@ -543,6 +586,7 @@ class JobQueue:
                     audio=row["file_id"],
                     caption=caption,
                     reply_markup=keyboard,
+                    request_timeout=self._settings.upload_timeout_sec,
                 )
             elif media_type == "document":
                 await self._bot.send_document(
@@ -550,6 +594,7 @@ class JobQueue:
                     document=row["file_id"],
                     caption=caption,
                     reply_markup=keyboard,
+                    request_timeout=self._settings.upload_timeout_sec,
                 )
             else:
                 await self._bot.send_video(
@@ -558,6 +603,7 @@ class JobQueue:
                     caption=caption,
                     reply_markup=keyboard,
                     supports_streaming=True,
+                    request_timeout=self._settings.upload_timeout_sec,
                 )
 
     async def _send(self, job: Job, path: Path) -> tuple[str | None, str]:
@@ -607,6 +653,7 @@ class JobQueue:
                         document=file,
                         caption=caption,
                         reply_markup=keyboard,
+                        request_timeout=self._settings.upload_timeout_sec,
                     )
                     return msg, "document"
 
@@ -618,6 +665,7 @@ class JobQueue:
                         duration=job.duration or 0,
                         title=job.title[:64],
                         reply_markup=keyboard,
+                        request_timeout=self._settings.upload_timeout_sec,
                     )
                     return msg, "audio"
 
@@ -628,6 +676,7 @@ class JobQueue:
                     duration=job.duration or 0,
                     supports_streaming=True,
                     reply_markup=keyboard,
+                    request_timeout=self._settings.upload_timeout_sec,
                 )
                 return msg, "video"
             except TelegramRetryAfter as exc:
@@ -648,6 +697,7 @@ class JobQueue:
                     document=file,
                     caption=caption,
                     reply_markup=keyboard,
+                    request_timeout=self._settings.upload_timeout_sec,
                 )
                 return msg, "document"
         raise RuntimeError("Medya gönderilemedi.")
@@ -768,6 +818,23 @@ class JobQueue:
                 last_stage=last_stage,
             ),
             keyboard=self._retry_keyboard(job),
+            wait=True,
+        )
+
+    async def _delivery_uncertain(self, job: Job) -> None:
+        """Gonderim yaniti alinamadiginda videoyu tekrar gondermeden bilgilendirir."""
+        last_stage = job.status_stage
+        job.status_stage = "error"
+        await self._status.edit(
+            job.chat_id,
+            job.status_message_id,
+            render_job_status(
+                job.status_header,
+                "error",
+                "⚠️ <b>Gönderim yanıtı alınamadı.</b>\n"
+                "Video geldiyse işlem tamamlandı. Gelmediyse linki tekrar gönderin.",
+                last_stage=last_stage,
+            ),
             wait=True,
         )
 

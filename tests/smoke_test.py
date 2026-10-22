@@ -1009,8 +1009,56 @@ async def main() -> int:
             await hub.close()
         print("25) durum mesaji hiz siniri OK")
 
+        # 26) medya gonderiminde zaman asimi: video gelmis olabilir, sahte hata verme
+        timeout_url = "https://example.com/status-timeout"
+        await db.cache_put(
+            "timeout-key",
+            timeout_url,
+            "h:720",
+            "vid_timeout",
+            "video",
+            "Zaman asimi",
+            "Test",
+            1000,
+        )
+        status = await queue.send_status(ADMIN.id, "zaman asimi durumu")
+        timeout_job = Job(
+            id="timeout1",
+            user_id=ADMIN.id,
+            chat_id=ADMIN.id,
+            status_message_id=status.message_id,
+            url=timeout_url,
+            preset="h:720",
+            title="Zaman asimi",
+            platform="Test",
+            source_url=timeout_url,
+            status_header="⏱ Zaman asimi testi",
+        )
+        original_send_video = bot.send_video
+
+        async def fail_video(*args, **kwargs):
+            raise TelegramNetworkError(
+                method=EditMessageText(
+                    chat_id=ADMIN.id, message_id=status.message_id, text="timeout"
+                ),
+                message="Request timeout error",
+            )
+
+        bot.send_video = fail_video
+        try:
+            check(await queue.submit(timeout_job), "zaman asimi isi kuyruga eklenemedi")
+            await asyncio.wait_for(queue._queue.join(), timeout=30)
+        finally:
+            bot.send_video = original_send_video
+        check(
+            "Gönderim yanıtı alınamadı" in bot.texts.get(status.message_id, ""),
+            "zaman asimi durumu kullaniciya gosterilmedi",
+        )
+        await queue.delete_status(ADMIN.id, status.message_id)
+        print("26) gonderim zaman asimi OK")
+
         stats = await db.stats()
-        print("26) istatistikler:", stats)
+        print("27) istatistikler:", stats)
     except AssertionError as exc:
         print("HATA:", exc)
         return 1

@@ -17,7 +17,7 @@ import time
 import uuid
 
 from aiogram import Bot, F, Router
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -534,7 +534,7 @@ async def on_retry(callback: CallbackQuery, queue: JobQueue) -> None:
     await callback.answer("Yeniden denendi 🔁")
 
 
-async def _resend_cached(bot: Bot, chat_id: int, row: dict) -> None:
+async def _resend_cached(bot: Bot, chat_id: int, row: dict, timeout: int) -> None:
     caption = f"<b>{escape((row.get('title') or 'Medya')[:200])}</b>"
     media_type = row["media_type"]
     keyboard = media_keyboard(
@@ -542,7 +542,11 @@ async def _resend_cached(bot: Bot, chat_id: int, row: dict) -> None:
     )
     if media_type == "audio":
         await bot.send_audio(
-            chat_id=chat_id, audio=row["file_id"], caption=caption, reply_markup=keyboard
+            chat_id=chat_id,
+            audio=row["file_id"],
+            caption=caption,
+            reply_markup=keyboard,
+            request_timeout=timeout,
         )
     elif media_type == "document":
         await bot.send_document(
@@ -550,6 +554,7 @@ async def _resend_cached(bot: Bot, chat_id: int, row: dict) -> None:
             document=row["file_id"],
             caption=caption,
             reply_markup=keyboard,
+            request_timeout=timeout,
         )
     else:
         await bot.send_video(
@@ -558,6 +563,7 @@ async def _resend_cached(bot: Bot, chat_id: int, row: dict) -> None:
             caption=caption,
             reply_markup=keyboard,
             supports_streaming=True,
+            request_timeout=timeout,
         )
 
 
@@ -583,7 +589,20 @@ async def on_action(
 
     if action == "again":
         try:
-            await _resend_cached(callback.bot, callback.message.chat.id, row)
+            await _resend_cached(
+                callback.bot,
+                callback.message.chat.id,
+                row,
+                settings.upload_timeout_sec,
+            )
+        except TelegramNetworkError as exc:
+            log.warning("Onbellek gonderim yaniti alinamadi: %s", exc)
+            await callback.answer(
+                "Gönderim yanıtı alınamadı. Video geldiyse işlem tamam; "
+                "gelmediyse tekrar deneyin.",
+                show_alert=True,
+            )
+            return
         except TelegramBadRequest as exc:
             log.info("Onbellek gecersiz (%s): %s", key, exc)
             await db.cache_delete(key)

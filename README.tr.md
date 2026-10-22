@@ -126,6 +126,7 @@ Tüm ayarlar `.env` üzerinden okunur ([bot/config.py](bot/config.py)):
 | `ADMIN_IDS` | boş | Virgülle ayrılmış admin ID'leri |
 | `CONCURRENCY` | `2` | Aynı anda çalışan indirme sayısı |
 | `MAX_UPLOAD_MB` | `50` | Telegram'a gönderilebilecek maks. boyut |
+| `UPLOAD_TIMEOUT_SEC` | `600` | Medya yükleme isteği zaman aşımı (yavaş bağlantı veya 2 GB yerel Bot API için artırın) |
 | `MAX_HEIGHT` | `0` | Bu çözünürlüğün üstünü listede gösterme (0 = sınırsız) |
 | `MAX_DURATION_SEC` | `1800` | Maks. video süresi (0 = sınırsız) |
 | `MAX_QUEUE_PER_USER` | `3` | Kullanıcı başına bekleyen iş limiti |
@@ -328,6 +329,10 @@ Test kendi verisini `.tmp/` altında oluşturur ve Telegram'a gerçek istek atma
   aralıklarla yeniden denenir. Başarılı gönderimden sonra durum mesajı silinir;
   sohbette sadece gönderilen medya kalır. Hata durumunda mesaj açıklama ve
   yeniden deneme butonuyla birlikte kalır.
+- Medya yüklemeleri `UPLOAD_TIMEOUT_SEC` kullanır (varsayılan 600 saniye).
+  Telegram zamanında yanıt vermezse bot dosyayı otomatik olarak **tekrar
+  göndermez**; çünkü dosya çoktan ulaşmış olabilir ve tekrar deneme kopya
+  oluşturabilir. Bunun yerine "Gönderim yanıtı alınamadı" uyarısı gösterilir.
 - Instagram fotoğraf/carousel gönderileri gallery-dl ile indirilir; video içeren
   gönderilerde kalite seçimi için yt-dlp kullanılır.
 - `file_id` önbelleği SQLite'ta tutulur (`CACHE_DAYS`, varsayılan 30 gün).
