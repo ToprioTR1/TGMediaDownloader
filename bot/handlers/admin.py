@@ -1,4 +1,4 @@
-"""Admin komutlari: istatistik, kullanicilar, yayin, ban, bakim modu."""
+"""Admin komutlari: istatistik, kullanicilar, yayin."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ class IsAdmin(BaseFilter):
         return bool(settings and user and user.id in settings.admin_ids)
 
 
-def _stats_text(stats: dict[str, Any], *, maintenance: bool, queue: JobQueue) -> str:
+def _stats_text(stats: dict[str, Any], *, queue: JobQueue) -> str:
     platforms = "\n".join(
         f"  • {name}: {count}" for name, count in stats["top_platforms"]
     ) or "  • veri yok"
@@ -42,34 +42,27 @@ def _stats_text(stats: dict[str, Any], *, maintenance: bool, queue: JobQueue) ->
         f"❌ Hata: {stats['errors']}\n"
         f"💾 Toplam veri: {human_size(stats['bytes'])}\n"
         f"⚡️ Önbellek: {stats.get('cached', 0)} içerik\n"
-        f"🚦 Kuyruk: {queue.queued_count} bekleyen • {queue.active_count} aktif\n"
-        f"🛠 Bakım modu: {'AÇIK' if maintenance else 'KAPALI'}\n\n"
+        f"🚦 Kuyruk: {queue.queued_count} bekleyen • {queue.active_count} aktif\n\n"
         f"<b>Platform dağılımı</b>\n{platforms}"
     )
 
 
 @router.message(Command("admin"), IsAdmin())
-async def cmd_admin(message: Message, db: Database) -> None:
-    maintenance = await db.maintenance()
+async def cmd_admin(message: Message) -> None:
     await message.answer(
         "<b>🛠 Admin paneli</b>\n"
         "Komutlar:\n"
         "/stats — istatistikler\n"
         "/users — son kullanıcılar\n"
-        "/broadcast &lt;mesaj&gt; — herkese duyuru\n"
-        "/ban &lt;id&gt; (veya bir mesaja yanıt) — yasakla\n"
-        "/unban &lt;id&gt; — yasağı kaldır\n"
-        "/maintenance — bakım modunu aç/kapat",
-        reply_markup=admin_keyboard(maintenance),
+        "/broadcast &lt;mesaj&gt; — herkese duyuru",
+        reply_markup=admin_keyboard(),
     )
 
 
 @router.message(Command("stats"), IsAdmin())
 async def cmd_stats(message: Message, db: Database, queue: JobQueue) -> None:
     stats = await db.stats()
-    await message.answer(
-        _stats_text(stats, maintenance=await db.maintenance(), queue=queue)
-    )
+    await message.answer(_stats_text(stats, queue=queue))
 
 
 @router.message(Command("users"), IsAdmin())
@@ -82,10 +75,9 @@ async def cmd_users(message: Message, db: Database) -> None:
     for user in users:
         name = escape(user.get("first_name") or "?")
         username = f" (@{escape(user['username'])})" if user.get("username") else ""
-        ban = " 🚫" if user.get("is_banned") else ""
         lines.append(
             f"• {name}{username} — <code>{user['id']}</code> — "
-            f"{user.get('downloads', 0)} indirme{ban}"
+            f"{user.get('downloads', 0)} indirme"
         )
     await message.answer("\n".join(lines))
 
@@ -133,50 +125,6 @@ async def cmd_broadcast(message: Message, db: Database) -> None:
         )
 
 
-@router.message(Command("ban"), IsAdmin())
-async def cmd_ban(message: Message, db: Database) -> None:
-    target = _target_id(message)
-    if target is None:
-        await message.answer("Kullanım: <code>/ban 123456789</code> veya bir mesaja yanıt verin.")
-        return
-    ok = await db.set_banned(target, True)
-    if ok:
-        await message.answer(f"🚫 <code>{target}</code> yasaklandı.")
-        with suppress(Exception):
-            await message.bot.send_message(target, "🚫 Botu kullanma erişiminiz kaldırıldı.")
-    else:
-        await message.answer("Kullanıcı bulunamadı.")
-
-
-@router.message(Command("unban"), IsAdmin())
-async def cmd_unban(message: Message, db: Database) -> None:
-    target = _target_id(message)
-    if target is None:
-        await message.answer("Kullanım: <code>/unban 123456789</code>")
-        return
-    ok = await db.set_banned(target, False)
-    await message.answer(
-        f"✅ <code>{target}</code> için yasak kaldırıldı." if ok else "Kullanıcı bulunamadı."
-    )
-
-
-@router.message(Command("maintenance"), IsAdmin())
-async def cmd_maintenance(message: Message, db: Database) -> None:
-    current = await db.maintenance()
-    await db.set_maintenance(not current)
-    state = "AÇIK 🛠" if not current else "KAPALI ✅"
-    await message.answer(f"Bakım modu artık {state}.")
-
-
-def _target_id(message: Message) -> int | None:
-    if message.reply_to_message and message.reply_to_message.from_user:
-        return message.reply_to_message.from_user.id
-    parts = (message.text or "").split()
-    if len(parts) > 1 and parts[1].isdigit():
-        return int(parts[1])
-    return None
-
-
 @router.callback_query(IsAdmin(), lambda c: (c.data or "").startswith("admin|"))
 async def cb_admin(callback: CallbackQuery, db: Database, queue: JobQueue) -> None:
     action = (callback.data or "").split("|", 1)[1]
@@ -185,12 +133,8 @@ async def cb_admin(callback: CallbackQuery, db: Database, queue: JobQueue) -> No
         if callback.message:
             with suppress(TelegramBadRequest):
                 await callback.message.edit_text(
-                    _stats_text(
-                        await db.stats(),
-                        maintenance=await db.maintenance(),
-                        queue=queue,
-                    ),
-                    reply_markup=admin_keyboard(await db.maintenance()),
+                    _stats_text(await db.stats(), queue=queue),
+                    reply_markup=admin_keyboard(),
                 )
     elif action == "users":
         await callback.answer()
@@ -198,19 +142,9 @@ async def cb_admin(callback: CallbackQuery, db: Database, queue: JobQueue) -> No
         lines = ["<b>👥 Son 10 kullanıcı</b>"]
         for user in users:
             name = escape(user.get("first_name") or "?")
-            ban = " 🚫" if user.get("is_banned") else ""
-            lines.append(f"• {name} — <code>{user['id']}</code> — {user.get('downloads', 0)}{ban}")
+            lines.append(f"• {name} — <code>{user['id']}</code> — {user.get('downloads', 0)}")
         if callback.message:
             with suppress(TelegramBadRequest):
                 await callback.message.answer("\n".join(lines))
-    elif action == "maintenance":
-        new_state = not await db.maintenance()
-        await db.set_maintenance(new_state)
-        await callback.answer(
-            "Bakım modu açıldı 🛠" if new_state else "Bakım modu kapatıldı ✅"
-        )
-        if callback.message:
-            with suppress(TelegramBadRequest):
-                await callback.message.edit_reply_markup(
-                    reply_markup=admin_keyboard(new_state)
-                )
+    else:
+        await callback.answer()

@@ -21,7 +21,7 @@ ile yazıldı, Docker ile çalışacak şekilde hazırlandı.
 - ⏱ İlerleme mesajı (yüzde, hız, kalan süre)
 - 📉 Günlük indirme limiti ve spam koruması (cooldown)
 - 👤 Kullanıcı kaydı, indirme istatistikleri (SQLite)
-- 🛠 Admin paneli: `/stats`, `/users`, `/broadcast`, `/ban`, `/unban`, `/maintenance`
+- 🛠 Admin paneli: `/stats`, `/users`, `/broadcast`
 - 🍪 Instagram/TikTok için `cookies.txt` desteği
 - 🔄 Docker açılışında yt-dlp + gallery-dl otomatik güncelleme (`AUTO_UPDATE_YTDLP=1`)
 - 🐳 Docker imajında ffmpeg hazır gelir
@@ -212,8 +212,6 @@ Bir mesajda en fazla 3 bağlantı işlenir.
 | `/stats` | admin | Kullanıcı/indirme istatistikleri |
 | `/users` | admin | Son 10 kullanıcı |
 | `/broadcast <mesaj>` | admin | Herkese duyuru |
-| `/ban <id>` / `/unban <id>` | admin | Yasakla / kaldır (mesaja yanıt da olur) |
-| `/maintenance` | admin | Bakım modunu aç/kapat |
 
 ## Proje Yapısı
 
@@ -221,12 +219,12 @@ Bir mesajda en fazla 3 bağlantı işlenir.
 bot/
 ├── __main__.py      # giriş noktası, dispatcher/middleware kurulumu
 ├── config.py        # .env → Settings (+ platform kalite varsayılanları)
-├── database.py      # SQLite: kullanıcılar, indirmeler, ayarlar, file_id önbelleği
+├── database.py      # SQLite: kullanıcılar, indirmeler, file_id önbelleği
 ├── downloader.py    # yt-dlp: probe (metadata + boyut tahmini) + indirme
 ├── gallery.py       # gallery-dl: Instagram fotoğraf/carousel indirme
 ├── queue.py         # iş kuyruğu, işçiler, ilerleme, önbellek, Telegram gönderimi
 ├── keyboards.py     # inline klavyeler (video aksiyonları, admin paneli)
-├── middlewares.py   # kullanıcı kaydı/ban + bakım modu
+├── middlewares.py   # kullanıcı kaydı
 ├── utils.py         # URL/kalite ayrıştırma, önbellek anahtarı, biçimlendirme
 └── handlers/
     ├── start.py     # /start /help /me

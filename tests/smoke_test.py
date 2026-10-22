@@ -56,13 +56,12 @@ from bot.handlers.download import (  # noqa: E402
     _needs_gallery,
     _resolve_preset,
 )
-from bot.middlewares import MaintenanceMiddleware, UserMiddleware  # noqa: E402
+from bot.middlewares import UserMiddleware  # noqa: E402
 from bot.queue import Job, JobQueue  # noqa: E402
 from bot.utils import nearest_height, parse_quality  # noqa: E402
 
 URL = "https://www.tiktok.com/@tiktok/video/7106594312292453675"
 ADMIN = User(id=42, is_bot=False, first_name="Ali", username="alitoprak")
-OTHER = User(id=43, is_bot=False, first_name="Baskasi", username="biri")
 
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
 
@@ -274,7 +273,6 @@ async def main() -> int:
     settings = Settings.load()
     db = Database(settings.db_path)
     await db.connect()
-    await db.set_maintenance(False)
 
     bot = FakeBot()
     downloader = Downloader(settings)
@@ -289,10 +287,8 @@ async def main() -> int:
         downloader=downloader,
         gallery=gallery,
     )
-    dp.message.middleware(UserMiddleware(db, settings.admin_ids))
-    dp.callback_query.middleware(UserMiddleware(db, settings.admin_ids))
-    dp.message.middleware(MaintenanceMiddleware(db, settings.admin_ids))
-    dp.callback_query.middleware(MaintenanceMiddleware(db, settings.admin_ids))
+    dp.message.middleware(UserMiddleware(db))
+    dp.callback_query.middleware(UserMiddleware(db))
     dp.include_router(start.router)
     dp.include_router(admin.router)
     dp.include_router(download.router)
@@ -503,41 +499,21 @@ async def main() -> int:
         )
         print("12) /stats OK")
 
-        # 13) bakim modu (admin olmayan kullanici engellenmeli)
-        await dp.feed_update(bot, msg_update("/maintenance", 7))
-        check(await db.maintenance(), "bakim modu acilmadi")
-        mark = len(bot.calls)
-        await dp.feed_update(bot, msg_update(URL, 8, user=OTHER))
-        check(any("sonra tekrar" in t for t in bot.texts_since(mark)), "bakim engellemedi")
-        await db.set_maintenance(False)
-        print("13) bakim modu OK")
-
-        # 14) /help ve /me
+        # 13) /help ve /me
         mark = len(bot.calls)
         await dp.feed_update(bot, msg_update("/help", 9))
         await dp.feed_update(bot, msg_update("/me", 10))
         texts = bot.texts_since(mark)
         check(any("Nas" in t for t in texts) and any("Kullan" in t for t in texts), "/help /me")
-        print("14) /help + /me OK")
+        print("13) /help + /me OK")
 
-        # 15) /users
+        # 14) /users
         mark = len(bot.calls)
         await dp.feed_update(bot, msg_update("/users", 11))
         check(any("42" in t for t in bot.texts_since(mark)), "/users")
-        print("15) /users OK")
+        print("14) /users OK")
 
-        # 16) ban / unban (admin olmayan kullanici)
-        await db.touch_user(OTHER.id, OTHER.username, OTHER.first_name)
-        await dp.feed_update(bot, msg_update("/ban 43", 12))
-        check((await db.get_user(OTHER.id))["is_banned"] == 1, "ban uygulanmadi")
-        mark = len(bot.calls)
-        await dp.feed_update(bot, msg_update("/start", 13, user=OTHER))
-        check(any("engellen" in t for t in bot.texts_since(mark)), "banli kullanici engellenmedi")
-        await dp.feed_update(bot, msg_update("/unban 43", 14))
-        check((await db.get_user(OTHER.id))["is_banned"] == 0, "ban kaldirilmadi")
-        print("16) ban/unban OK")
-
-        # 17) broadcast
+        # 15) broadcast
         mark = len(bot.calls)
         await dp.feed_update(bot, msg_update("/broadcast deneme duyurusu", 15))
         check(
@@ -545,9 +521,9 @@ async def main() -> int:
             "duyuru gonderilmedi",
         )
         check("tamamland" in " ".join(bot.texts.values()).lower(), "duyuru raporu yok")
-        print("17) /broadcast OK")
+        print("15) /broadcast OK")
 
-        # 18) cooldown (settings gecici olarak 10 sn yapilir)
+        # 16) cooldown (settings gecici olarak 10 sn yapilir)
         object.__setattr__(settings, "cooldown_sec", 10)
         try:
             download._last_request[ADMIN.id] = time.monotonic()
@@ -560,10 +536,10 @@ async def main() -> int:
         finally:
             object.__setattr__(settings, "cooldown_sec", 0)
             download._last_request.pop(ADMIN.id, None)
-        print("18) cooldown OK")
+        print("16) cooldown OK")
 
         stats = await db.stats()
-        print("19) istatistikler:", stats)
+        print("17) istatistikler:", stats)
     except AssertionError as exc:
         print("HATA:", exc)
         return 1

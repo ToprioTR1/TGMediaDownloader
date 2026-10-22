@@ -18,8 +18,7 @@ CREATE TABLE IF NOT EXISTS users (
     first_seen  TEXT NOT NULL DEFAULT (datetime('now')),
     last_seen   TEXT NOT NULL DEFAULT (datetime('now')),
     downloads   INTEGER NOT NULL DEFAULT 0,
-    bytes_sent  INTEGER NOT NULL DEFAULT 0,
-    is_banned   INTEGER NOT NULL DEFAULT 0
+    bytes_sent  INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS downloads (
@@ -35,11 +34,6 @@ CREATE TABLE IF NOT EXISTS downloads (
 
 CREATE INDEX IF NOT EXISTS idx_downloads_user ON downloads(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_downloads_created ON downloads(created_at);
-
-CREATE TABLE IF NOT EXISTS settings (
-    key   TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-);
 
 CREATE TABLE IF NOT EXISTS media_cache (
     cache_key   TEXT PRIMARY KEY,
@@ -61,7 +55,6 @@ class Database:
     def __init__(self, path: Path) -> None:
         self._path = Path(path)
         self._conn: aiosqlite.Connection | None = None
-        self._settings: dict[str, str] = {}
 
     # ---------------------------------------------------------------- baglanti
 
@@ -79,46 +72,12 @@ class Database:
         await self._conn.execute("PRAGMA synchronous=NORMAL")
         await self._conn.executescript(SCHEMA)
         await self._conn.commit()
-        await self._load_settings()
         log.info("Veritabani hazir: %s", self._path)
 
     async def close(self) -> None:
         if self._conn is not None:
             await self._conn.close()
             self._conn = None
-
-    async def _load_settings(self) -> None:
-        async with self.conn.execute("SELECT key, value FROM settings") as cur:
-            rows = await cur.fetchall()
-        self._settings = {row["key"]: row["value"] for row in rows}
-
-    # ----------------------------------------------------------------- ayarlar
-
-    async def get_setting(self, key: str, default: str | None = None) -> str | None:
-        if key not in self._settings:
-            async with self.conn.execute(
-                "SELECT value FROM settings WHERE key = ?", (key,)
-            ) as cur:
-                row = await cur.fetchone()
-            if row is None:
-                return default
-            self._settings[key] = row["value"]
-        return self._settings[key]
-
-    async def set_setting(self, key: str, value: str) -> None:
-        await self.conn.execute(
-            "INSERT INTO settings(key, value) VALUES(?, ?) "
-            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            (key, value),
-        )
-        await self.conn.commit()
-        self._settings[key] = value
-
-    async def maintenance(self) -> bool:
-        return (await self.get_setting("maintenance", "0")) == "1"
-
-    async def set_maintenance(self, enabled: bool) -> None:
-        await self.set_setting("maintenance", "1" if enabled else "0")
 
     # -------------------------------------------------------------- kullanicilar
 
@@ -137,22 +96,15 @@ class Database:
             (user_id, username, first_name),
         )
         await self.conn.commit()
-        return await self.get_user(user_id) or {"id": user_id, "is_banned": 0}
+        return await self.get_user(user_id) or {"id": user_id}
 
     async def get_user(self, user_id: int) -> dict[str, Any] | None:
         async with self.conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)) as cur:
             row = await cur.fetchone()
         return dict(row) if row else None
 
-    async def set_banned(self, user_id: int, banned: bool) -> bool:
-        cur = await self.conn.execute(
-            "UPDATE users SET is_banned = ? WHERE id = ?", (1 if banned else 0, user_id)
-        )
-        await self.conn.commit()
-        return cur.rowcount > 0
-
     async def all_user_ids(self) -> list[int]:
-        async with self.conn.execute("SELECT id FROM users WHERE is_banned = 0") as cur:
+        async with self.conn.execute("SELECT id FROM users") as cur:
             rows = await cur.fetchall()
         return [row["id"] for row in rows]
 

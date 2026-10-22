@@ -19,7 +19,7 @@ from .database import Database
 from .downloader import Downloader
 from .gallery import GalleryDownloader
 from .handlers import admin, download, start
-from .middlewares import MaintenanceMiddleware, UserMiddleware
+from .middlewares import UserMiddleware
 from .queue import JobQueue
 
 log = logging.getLogger(__name__)
@@ -72,10 +72,8 @@ async def run() -> None:
         gallery=gallery,
     )
 
-    dispatcher.message.middleware(UserMiddleware(db, settings.admin_ids))
-    dispatcher.callback_query.middleware(UserMiddleware(db, settings.admin_ids))
-    dispatcher.message.middleware(MaintenanceMiddleware(db, settings.admin_ids))
-    dispatcher.callback_query.middleware(MaintenanceMiddleware(db, settings.admin_ids))
+    dispatcher.message.middleware(UserMiddleware(db))
+    dispatcher.callback_query.middleware(UserMiddleware(db))
 
     dispatcher.include_router(start.router)
     dispatcher.include_router(admin.router)

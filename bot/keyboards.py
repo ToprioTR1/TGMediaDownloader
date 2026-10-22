@@ -33,22 +33,12 @@ def gallery_keyboard(source_url: str | None) -> InlineKeyboardMarkup | None:
     )
 
 
-def admin_keyboard(maintenance: bool) -> InlineKeyboardMarkup:
+def admin_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(text="📊 İstatistik", callback_data="admin|stats"),
                 InlineKeyboardButton(text="👥 Kullanıcılar", callback_data="admin|users"),
-            ],
-            [
-                InlineKeyboardButton(
-                    text=(
-                        "🛠 Bakım modu: AÇIK"
-                        if maintenance
-                        else "🛠 Bakım modu: KAPALI"
-                    ),
-                    callback_data="admin|maintenance",
-                )
-            ],
+            ]
         ]
     )
