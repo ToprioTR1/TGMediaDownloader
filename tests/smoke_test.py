@@ -307,6 +307,10 @@ async def main() -> int:
         check(nearest_height([1920, 1280, 1024], 1012) == 1024, "tiktok varsayilani yanlis")
         check(wants_document("link dosya") and wants_document("link file"), "dosya ipucu okunamadi")
         check(not wants_document("link 720p"), "dosya olmayan metin dosya sayildi")
+        check(
+            not wants_document("https://example.com/file/123"),
+            "URL icindeki file dosya ipucu sayildi",
+        )
         check(settings.default_height_for("Instagram") == 1280, "instagram varsayilani")
         check(settings.default_height_for("TikTok") == 1012, "tiktok varsayilani")
         check(settings.default_height_for("YouTube") == 720, "youtube varsayilani")

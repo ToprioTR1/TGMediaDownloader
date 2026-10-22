@@ -65,14 +65,19 @@ def parse_quality(text: str) -> int | None:
     return None
 
 
+def _without_urls(text: str) -> str:
+    """Anahtar kelime ararken URL'lerin icindeki metni yok sayar."""
+    return URL_RE.sub(" ", text or "")
+
+
 def wants_audio(text: str) -> bool:
     """Kullanici ses indirmek istiyor mu ('mp3', 'ses' ...)."""
-    return bool(AUDIO_RE.search(text or ""))
+    return bool(AUDIO_RE.search(_without_urls(text)))
 
 
 def wants_document(text: str) -> bool:
     """Kullanici medyayi dosya olarak istiyor mu ('dosya', 'file' ...)."""
-    return bool(DOCUMENT_RE.search(text or ""))
+    return bool(DOCUMENT_RE.search(_without_urls(text)))
 
 
 def nearest_height(heights: list[int], target: int | None) -> int | None:
