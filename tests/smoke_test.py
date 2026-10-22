@@ -35,6 +35,7 @@ from aiogram import Dispatcher  # noqa: E402
 from aiogram.fsm.storage.memory import MemoryStorage  # noqa: E402
 from aiogram.types import (  # noqa: E402
     Audio,
+    CallbackQuery,
     Chat,
     Document,
     Message,
@@ -46,7 +47,7 @@ from aiogram.types import (  # noqa: E402
 
 from bot.config import Settings  # noqa: E402
 from bot.database import Database  # noqa: E402
-from bot.downloader import Downloader, MediaInfo  # noqa: E402
+from bot.downloader import DownloadError, Downloader, MediaInfo  # noqa: E402
 from bot.gallery import GalleryDownloader  # noqa: E402
 from bot.handlers import admin, download, start  # noqa: E402
 from bot.handlers.download import (  # noqa: E402
@@ -261,6 +262,19 @@ def simple_message(text: str, message_id: int = 900, user: User = ADMIN) -> Mess
         chat=Chat(id=user.id, type="private"),
         from_user=user,
         text=text,
+    )
+
+
+def callback_update(data: str, message: Message, user: User = ADMIN) -> Update:
+    return Update(
+        update_id=8000,
+        callback_query=CallbackQuery(
+            id="cb-test",
+            from_user=user,
+            chat_instance="test",
+            data=data,
+            message=message,
+        ),
     )
 
 
@@ -761,8 +775,48 @@ async def main() -> int:
         check((await db.cache_stats())["count"] == cache_stats["count"], "onbellek bozuldu")
         print("23) onbellek yonetimi OK")
 
+        # 24) kesif hatasinda da yeniden dene butonu
+        original_probe = downloader.probe
+
+        def fail_probe(url: str) -> MediaInfo:
+            raise DownloadError("geçici hata")
+
+        downloader.probe = fail_probe  # type: ignore[method-assign]
+        try:
+            mark = len(bot.calls)
+            await dp.feed_update(bot, msg_update(f"{URL} 720p", 50))
+            retry_calls = [
+                c
+                for c in bot.calls[mark:]
+                if c[0] == "edit_message_text" and c[1].get("reply_markup")
+            ]
+            check(bool(retry_calls), "kesif hatasinda yeniden dene butonu yok")
+            cb_data = retry_calls[-1][1]["reply_markup"].inline_keyboard[0][0].callback_data
+            check(
+                (cb_data or "").startswith("retrytext|"),
+                f"kesif retry callback yanlis: {cb_data}",
+            )
+
+            fake_status = simple_message("hata", 9500).as_(bot)
+            mark = len(bot.calls)
+            await dp.feed_update(bot, callback_update(cb_data, fake_status))
+            check(
+                any("inceleniyor" in t for t in bot.texts_since(mark)),
+                "kesif retry yeniden denemedi",
+            )
+            check(
+                any(
+                    "geçici hata" in t
+                    for t in bot.texts_since(mark, "edit_message_text")
+                ),
+                "kesif retry hata mesajini gostermedi",
+            )
+        finally:
+            downloader.probe = original_probe  # type: ignore[method-assign]
+        print("24) kesif hatasi retry OK")
+
         stats = await db.stats()
-        print("24) istatistikler:", stats)
+        print("25) istatistikler:", stats)
     except AssertionError as exc:
         print("HATA:", exc)
         return 1

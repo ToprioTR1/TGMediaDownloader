@@ -19,7 +19,13 @@ from contextlib import suppress
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.types import CallbackQuery, LinkPreviewOptions, Message
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    LinkPreviewOptions,
+    Message,
+)
 
 from ..config import Settings
 from ..database import Database
@@ -43,6 +49,7 @@ log = logging.getLogger(__name__)
 router = Router(name="download")
 
 _last_request: dict[int, float] = {}
+_probe_retries: dict[str, tuple[int, int, str, str]] = {}
 PROBE_TIMEOUT = 90
 GALLERY_HOSTS = ("instagram.com", "instagr.am")
 
@@ -196,6 +203,24 @@ def _message_text(message: Message) -> str:
     return text
 
 
+def _remember_probe_failure(
+    chat_id: int, user_id: int, text: str, url: str
+) -> InlineKeyboardMarkup:
+    token = uuid.uuid4().hex[:10]
+    _probe_retries[token] = (chat_id, user_id, text, url)
+    while len(_probe_retries) > 200:
+        _probe_retries.pop(next(iter(_probe_retries)))
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🔁 Yeniden dene", callback_data=f"retrytext|{token}"
+                )
+            ]
+        ]
+    )
+
+
 @router.message(F.text | F.caption)
 async def on_text(
     message: Message,
@@ -214,8 +239,7 @@ async def on_text(
     if (message.text or "").startswith("/"):
         return
 
-    urls = extract_urls(text)
-    if not urls:
+    if not extract_urls(text):
         return
 
     user_id = message.from_user.id
@@ -223,27 +247,56 @@ async def on_text(
     last = _last_request.get(user_id, 0.0)
     if settings.cooldown_sec and now - last < settings.cooldown_sec:
         wait = int(settings.cooldown_sec - (now - last)) + 1
-        await message.reply(f"⏱ Çok hızlı gönderiyorsunuz. {wait} sn sonra tekrar deneyin.")
-        return
-
-    error = await _limit_error(user_id, db, settings, queue)
-    if error:
-        await message.reply(error)
+        await message.bot.send_message(
+            message.chat.id,
+            f"⏱ Çok hızlı gönderiyorsunuz. {wait} sn sonra tekrar deneyin.",
+        )
         return
 
     _last_request[user_id] = now
+    await _process_text(
+        message.bot,
+        message.chat.id,
+        user_id,
+        text,
+        settings=settings,
+        db=db,
+        downloader=downloader,
+        gallery=gallery,
+        queue=queue,
+    )
+
+
+async def _process_text(
+    bot: Bot,
+    chat_id: int,
+    user_id: int,
+    text: str,
+    *,
+    settings: Settings,
+    db: Database,
+    downloader: Downloader,
+    gallery: GalleryDownloader,
+    queue: JobQueue,
+    only_url: str | None = None,
+) -> None:
+    error = await _limit_error(user_id, db, settings, queue)
+    if error:
+        await bot.send_message(chat_id, error)
+        return
 
     user = await db.get_user(user_id) or {}
     requested, audio = _request_options(text, user)
     show_caption = bool(user.get("show_caption", 1))
     as_document = wants_document(text)
 
+    urls = [only_url] if only_url else extract_urls(text)
     for url in urls:
         if is_blocked_host(url):
-            await message.reply("🚫 Bu bağlantı güvenlik nedeniyle işlenemiyor.")
+            await bot.send_message(chat_id, "🚫 Bu bağlantı güvenlik nedeniyle işlenemiyor.")
             continue
 
-        status = await message.reply("🔎 Bağlantı inceleniyor…")
+        status = await bot.send_message(chat_id, "🔎 Bağlantı inceleniyor…")
         info: MediaInfo | None = None
         gallery_items: list[dict] | None = None
 
@@ -252,24 +305,34 @@ async def on_text(
                 asyncio.to_thread(downloader.probe, url), timeout=PROBE_TIMEOUT
             )
         except asyncio.TimeoutError:
-            await status.edit_text("⌛️ Platform yanıt vermedi. Lütfen tekrar deneyin.")
+            await status.edit_text(
+                "⌛️ Platform yanıt vermedi. Lütfen tekrar deneyin.",
+                reply_markup=_remember_probe_failure(chat_id, user_id, text, url),
+            )
             continue
         except DownloadError as exc:
             if _gallery_url(url):
                 gallery_items = await _probe_gallery(gallery, url)
             if not gallery_items:
-                await status.edit_text(f"❌ {escape(str(exc))}")
+                await status.edit_text(
+                    f"❌ {escape(str(exc))}",
+                    reply_markup=_remember_probe_failure(chat_id, user_id, text, url),
+                )
                 continue
         except Exception:  # noqa: BLE001
             log.exception("Probe hatasi: %s", url)
-            await status.edit_text("❌ Bağlantı incelenemedi. Lütfen tekrar deneyin.")
+            await status.edit_text(
+                "❌ Bağlantı incelenemedi. Lütfen tekrar deneyin.",
+                reply_markup=_remember_probe_failure(chat_id, user_id, text, url),
+            )
             continue
 
         if info is not None and _needs_gallery(info):
             gallery_items = await _probe_gallery(gallery, url)
             if gallery_items is None:
                 await status.edit_text(
-                    "❌ Bu gönderide indirilebilir video bulunamadı."
+                    "❌ Bu gönderide indirilebilir video bulunamadı.",
+                    reply_markup=_remember_probe_failure(chat_id, user_id, text, url),
                 )
                 continue
 
@@ -284,7 +347,7 @@ async def on_text(
             job = Job(
                 id=uuid.uuid4().hex[:10],
                 user_id=user_id,
-                chat_id=message.chat.id,
+                chat_id=chat_id,
                 status_message_id=status.message_id,
                 url=url,
                 preset="gallery",
@@ -337,7 +400,7 @@ async def on_text(
         job = Job(
             id=uuid.uuid4().hex[:10],
             user_id=user_id,
-            chat_id=message.chat.id,
+            chat_id=chat_id,
             status_message_id=status.message_id,
             url=info.webpage_url,
             preset=preset,
@@ -371,6 +434,49 @@ async def on_text(
 
 
 # --------------------------------------------------------------- buton aksiyonlari
+
+
+@router.callback_query(F.data.startswith("retrytext|"))
+async def on_retry_text(
+    callback: CallbackQuery,
+    settings: Settings,
+    db: Database,
+    downloader: Downloader,
+    gallery: GalleryDownloader,
+    queue: JobQueue,
+) -> None:
+    if callback.message is None:
+        await callback.answer()
+        return
+
+    token = (callback.data or "").split("|", 1)[1]
+    item = _probe_retries.pop(token, None)
+    if item is None:
+        await callback.answer(
+            "Bu deneme artık geçersiz. Linki tekrar gönderin.", show_alert=True
+        )
+        return
+
+    chat_id, user_id, text, url = item
+    if callback.message.chat.id != chat_id:
+        await callback.answer("Bu buton bu sohbete ait değil.", show_alert=True)
+        return
+
+    with suppress(TelegramBadRequest):
+        await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.answer("Yeniden denendi 🔁")
+    await _process_text(
+        callback.bot,
+        chat_id,
+        user_id,
+        text,
+        settings=settings,
+        db=db,
+        downloader=downloader,
+        gallery=gallery,
+        queue=queue,
+        only_url=url,
+    )
 
 
 @router.callback_query(F.data.startswith("retry|"))
