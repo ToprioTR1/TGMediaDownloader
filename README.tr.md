@@ -195,10 +195,13 @@ Gönderi açıklamasında (caption) link varsa veya linki bir mesajı yanıtlaya
 gönderirsen de çalışır: gönderiyi yanıtla, sadece `720p` yaz.
 
 Her istek tek bir durum mesajı kullanır: link incelenirken, indirilirken ve
-gönderilirken bu mesaj yerinde düzenlenir; medya gelince silinir. Aynı link
-indirilirken tekrar gönderilirse yeni iş veya yeni durum mesajı açılmaz.
-Başarısız işlerde mevcut hata mesajı `🔁 Yeniden dene` butonuyla kalır; tekrar
-deneme de aynı mesajı kullanır.
+gönderilirken bu mesaj yerinde düzenlenir; medya gelince silinir. Hızlı
+güncellemeler birleştirilir, içerik değişmediyse tekrar gönderilmez ve aynı
+sohbet içindeki durum düzenlemeleri kısa bir minimum aralıkla sırayla yapılır.
+İlerleme en fazla 10 saniyede bir yenilenir. Aynı link indirilirken tekrar
+gönderilirse yeni iş veya yeni durum mesajı açılmaz. Başarısız işlerde mevcut
+hata mesajı `🔁 Yeniden dene` butonuyla kalır; tekrar deneme de aynı mesajı
+kullanır.
 
 `/ayar` ile kişisel varsayılanları kaydedebilirsin:
 
@@ -288,7 +291,8 @@ Instagram fotoğraf gönderilerinde yt-dlp başarısız olursa `gallery.py` devr
 ağdan küçük bir TikTok videosu indirir; varsayılan/istenen kalite, MP3, dosya
 olarak gönderim, file_id önbelleği, aynı linkin tekilleştirilmesi, yeniden deneme,
 caption ve yanıt desteği, boyut koruması, gallery-dl ile fotoğraf gönderimi,
-`/ayar`, geçici dosya temizliği, DB/admin/önbellek adımlarını kontrol eder):
+`/ayar`, geçici dosya temizliği, durum mesajlarının birleştirilmesi, `RetryAfter`,
+geçici ağ hataları ve DB/admin/önbellek adımlarını kontrol eder):
 
 ```bash
 pip install -r requirements.txt
@@ -317,10 +321,13 @@ Test kendi verisini `.tmp/` altında oluşturur ve Telegram'a gerçek istek atma
   6 saatten eski artık dosyalar 30 dakikada bir çalışan temizlik göreviyle,
   takip edilen geçici klasörler ise kapanışta silinir.
 - Tüm aşamalar tek bir durum mesajı düzenlenerek gösterilir; her aşama için yeni
-  mesaj gönderilmez. İlerleme düzenlemeleri Telegram flood limitine takılmamak
-  için seyreltilmiştir. Başarılı gönderimden sonra durum mesajı silinir; sohbette
-  sadece gönderilen medya kalır. Hata durumunda mesaj açıklama ve yeniden deneme
-  butonuyla birlikte kalır.
+  mesaj gönderilmez. Güncellemeler birleştirilir, yalnızca en son bekleyen durum
+  yazılır, aynı metin tekrar gönderilmez ve aynı sohbetteki düzenlemeler minimum
+  2,5 saniye aralıkla sırayla yapılır. `RetryAfter` yanıtlarında Telegram'ın
+  bildirdiği süre kadar beklenir; geçici ağ/sunucu hatalarında sınırlı ve artan
+  aralıklarla yeniden denenir. Başarılı gönderimden sonra durum mesajı silinir;
+  sohbette sadece gönderilen medya kalır. Hata durumunda mesaj açıklama ve
+  yeniden deneme butonuyla birlikte kalır.
 - Instagram fotoğraf/carousel gönderileri gallery-dl ile indirilir; video içeren
   gönderilerde kalite seçimi için yt-dlp kullanılır.
 - `file_id` önbelleği SQLite'ta tutulur (`CACHE_DAYS`, varsayılan 30 gün).

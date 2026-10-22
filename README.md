@@ -205,10 +205,13 @@ Requesting the same video a second time sends it **instantly** from the
 reply to a message with a link: reply to the post and just type `720p`.
 
 Each request uses a single status message: it is edited in place while the link
-is probed, downloaded and sent, then deleted after the media arrives. If the
-same link is sent again while it is still queued or downloading, no second job
-or status message is created. Failed jobs keep their existing message and show
-a `🔁 Yeniden dene` (retry) button; retrying reuses that same message.
+is probed, downloaded and sent, then deleted after the media arrives. Rapid
+updates are coalesced, unchanged text is not sent again, and status edits in one
+chat are serialized with a short minimum interval. Progress is refreshed at most
+every 10 seconds. If the same link is sent again while it is still queued or
+downloading, no second job or status message is created. Failed jobs keep their
+existing message and show a `🔁 Yeniden dene` (retry) button; retrying reuses
+that same message.
 
 Use `/ayar` to save personal defaults:
 
@@ -299,7 +302,8 @@ For Instagram photo posts, `gallery.py` takes over if yt-dlp fails.
 downloads a small TikTok video from the real network and checks default/requested
 quality, MP3, document delivery, the file_id cache, in-flight deduplication,
 retry, caption and reply support, the size guard, photo delivery via gallery-dl,
-`/ayar`, temporary-file cleanup, and the DB/admin/cache steps):
+`/ayar`, temporary-file cleanup, status-message coalescing, `RetryAfter`,
+transient network handling, and the DB/admin/cache steps):
 
 ```bash
 pip install -r requirements.txt
@@ -330,10 +334,13 @@ Telegram.
   a janitor every 30 minutes, and tracked temporary directories are removed on
   graceful shutdown.
 - All stages are shown by editing one status message, not by sending a new
-  message for each stage. Progress edits are throttled to avoid Telegram flood
-  limits. After a successful send, the status message is deleted; only the
-  delivered media remains in the chat. On error, the message stays with an
-  explanation and a retry button.
+  message for each stage. Updates are merged so only the latest pending state is
+  sent, identical text is skipped, and edits are serialized per chat with a
+  minimum interval (2.5 seconds) to avoid Telegram flood limits. `RetryAfter`
+  responses are honored with the server-provided delay; temporary network/server
+  errors use a small bounded backoff. After a successful send, the status
+  message is deleted; only the delivered media remains in the chat. On error,
+  the message stays with an explanation and a retry button.
 - Instagram photo/carousel posts are downloaded with gallery-dl; for posts that
   contain video, yt-dlp is used for quality selection.
 - The `file_id` cache is stored in SQLite (`CACHE_DAYS`, 30 days by default).

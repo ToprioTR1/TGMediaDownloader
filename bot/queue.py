@@ -27,7 +27,6 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     InputMediaPhoto,
     InputMediaVideo,
-    LinkPreviewOptions,
     Message,
 )
 
@@ -36,6 +35,12 @@ from .database import Database
 from .downloader import DownloadError, Downloader
 from .gallery import VIDEO_EXT, GalleryDownloader, GalleryError
 from .keyboards import gallery_keyboard, media_keyboard
+from .status import (
+    DEFAULT_EDIT_INTERVAL,
+    DEFAULT_PROGRESS_INTERVAL,
+    StatusHub,
+    render_job_status,
+)
 from .utils import escape, human_size, media_cache_key, quality_label, render_progress
 
 log = logging.getLogger(__name__)
@@ -57,6 +62,8 @@ class Job:
     enqueued_at: float = field(default_factory=time.time)
     show_caption: bool = True
     as_document: bool = False
+    status_header: str = ""
+    status_stage: str = "queued"
 
     @property
     def cache_preset(self) -> str:
@@ -76,12 +83,23 @@ class JobQueue:
         settings: Settings,
         downloader: Downloader,
         gallery: GalleryDownloader | None = None,
+        *,
+        status_min_interval: float = DEFAULT_EDIT_INTERVAL,
+        status_progress_interval: float = DEFAULT_PROGRESS_INTERVAL,
+        status_retry_backoff: float = 1.0,
     ) -> None:
         self._bot = bot
         self._db = db
         self._settings = settings
         self._downloader = downloader
         self._gallery = gallery
+        self._status = StatusHub(
+            bot,
+            min_interval=status_min_interval,
+            progress_interval=status_progress_interval,
+            retry_backoff=status_retry_backoff,
+        )
+        self._progress_interval = self._status.progress_interval
         self._queue: asyncio.Queue[Job] = asyncio.Queue()
         self._tasks: list[asyncio.Task[None]] = []
         self._pending: Counter[int] = Counter()
@@ -114,6 +132,7 @@ class JobQueue:
             with contextlib.suppress(asyncio.CancelledError):
                 await task
         self._tasks.clear()
+        await self._status.close()
         # Kapanista yarim kalan gecici klasorleri temizle.
         for path in list(self._tmpdirs):
             await asyncio.to_thread(shutil.rmtree, path, True)
@@ -132,6 +151,51 @@ class JobQueue:
     def active_count(self) -> int:
         return self._active
 
+    # --------------------------------------------------------- durum mesaji
+
+    async def send_status(
+        self,
+        chat_id: int,
+        text: str,
+        *,
+        keyboard: Any = None,
+        preview: bool = False,
+        preview_url: str | None = None,
+    ) -> Message:
+        """Tek bir durum mesaji olusturur ve hiz siniri yoneticisine kaydeder."""
+        return await self._status.send(
+            chat_id,
+            text,
+            keyboard=keyboard,
+            preview=preview,
+            preview_url=preview_url,
+        )
+
+    async def edit_status(
+        self,
+        chat_id: int,
+        message_id: int,
+        text: str,
+        *,
+        keyboard: Any = None,
+        preview: bool = False,
+        preview_url: str | None = None,
+        wait: bool = True,
+    ) -> None:
+        """Mevcut durum mesajini gunceller; varsayilan olarak sonucu bekler."""
+        await self._status.edit(
+            chat_id,
+            message_id,
+            text,
+            keyboard=keyboard,
+            preview=preview,
+            preview_url=preview_url,
+            wait=wait,
+        )
+
+    async def delete_status(self, chat_id: int, message_id: int) -> None:
+        await self._status.delete(chat_id, message_id)
+
     async def retry(self, job_id: str, chat_id: int, message_id: int) -> bool:
         """Hata alan bir isi ayni mesaji duzenleyerek tekrar kuyruga alir."""
         job = self._retry_jobs.pop(job_id, None)
@@ -139,13 +203,12 @@ class JobQueue:
             return False
 
         # Yeni mesaj gondermek yerine mevcut hata mesajini durum mesajina cevir.
-        with contextlib.suppress(TelegramBadRequest):
-            await self._bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=message_id,
-                text="🔁 <b>Yeniden deneniyor…</b>",
-                reply_markup=None,
-            )
+        await self._status.edit(
+            chat_id,
+            message_id,
+            render_job_status(job.status_header, "queued"),
+            wait=True,
+        )
 
         new_job = Job(
             id=uuid.uuid4().hex[:10],
@@ -161,18 +224,23 @@ class JobQueue:
             source_url=job.source_url,
             show_caption=job.show_caption,
             as_document=job.as_document,
+            status_header=job.status_header,
         )
         try:
-            await self.submit(new_job)
+            queued = await self.submit(new_job)
         except QueueFullError as exc:
-            with contextlib.suppress(TelegramBadRequest):
-                await self._bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=message_id,
-                    text=f"❌ {escape(str(exc))}",
-                    reply_markup=None,
-                )
+            await self._status.edit(
+                chat_id,
+                message_id,
+                render_job_status(
+                    job.status_header, "error", f"❌ {escape(str(exc))}"
+                ),
+                wait=True,
+            )
             return False
+        if not queued:
+            # Ayni is zaten calisiyor; bu eski hata mesajini birakma.
+            await self._status.delete(chat_id, message_id)
         return True
 
     async def submit(self, job: Job) -> bool:
@@ -202,6 +270,12 @@ class JobQueue:
         self._pending[job.user_id] += 1
         self._jobs[key] = job
         self._queue.put_nowait(job)
+        job.status_stage = "queued"
+        await self._status.edit(
+            job.chat_id,
+            job.status_message_id,
+            render_job_status(job.status_header, "queued"),
+        )
         return True
 
     # ----------------------------------------------------------------- isciler
@@ -216,6 +290,16 @@ class JobQueue:
                 raise
             except Exception:  # noqa: BLE001
                 log.exception("Isci %s beklenmeyen hata: %s", index, job.url)
+                preset = "gallery" if job.kind == "gallery" else job.preset
+                with contextlib.suppress(Exception):
+                    await self._db.record_download(
+                        job.user_id, job.url, job.platform, preset, "error"
+                    )
+                with contextlib.suppress(Exception):
+                    await self._fail(
+                        job,
+                        "❌ Beklenmeyen bir hata oluştu. Lütfen tekrar deneyin.",
+                    )
             finally:
                 key = (job.user_id, job.chat_id, job.url, job.cache_preset)
                 if self._jobs.get(key) is job:
@@ -237,6 +321,9 @@ class JobQueue:
             )
             if cached is not None:
                 try:
+                    await self._set_stage(
+                        job, "cached", "📤 Önbellekten gönderiliyor…"
+                    )
                     await self._send_cached(job, cached)
                 except TelegramBadRequest as exc:
                     log.info("Onbellek gecersiz, yeniden indirilecek (%s): %s", job.id, exc)
@@ -258,17 +345,17 @@ class JobQueue:
         tmpdir = await self._mkdtemp(job)
         state: dict[str, Any] = {"status": "starting"}
         started = time.time()
-        ticker = asyncio.create_task(self._progress_loop(job, state))
+        ticker: asyncio.Task[None] | None = None
 
         try:
-            await self._edit(job, "⬇️ <b>İndirme başlıyor…</b>")
+            await self._set_stage(job, "download", "⬇️ <b>İndiriliyor…</b>")
+            ticker = asyncio.create_task(self._progress_loop(job, state))
             path = await asyncio.to_thread(
                 self._downloader.download, job.url, job.preset, tmpdir, state
             )
 
-            ticker.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await ticker
+            await self._stop_ticker(ticker)
+            ticker = None
 
             size = path.stat().st_size
             if size > self._settings.max_upload_bytes:
@@ -277,7 +364,9 @@ class JobQueue:
                     f"{self._settings.max_upload_mb} MB. Daha düşük bir kalite deneyin."
                 )
 
-            await self._edit(job, f"📤 <b>Gönderiliyor…</b> ({human_size(size)})")
+            await self._set_stage(
+                job, "sending", f"📤 <b>Gönderiliyor…</b> ({human_size(size)})"
+            )
             file_id, media_type = await self._send(job, path)
             if file_id and self._settings.cache_days:
                 try:
@@ -308,6 +397,8 @@ class JobQueue:
                 elapsed,
             )
         except DownloadError as exc:
+            await self._stop_ticker(ticker)
+            ticker = None
             await self._db.record_download(
                 job.user_id, job.url, job.platform, job.preset, "error"
             )
@@ -317,6 +408,8 @@ class JobQueue:
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001
+            await self._stop_ticker(ticker)
+            ticker = None
             log.exception("Islem hatasi: %s", job.url)
             await self._db.record_download(
                 job.user_id, job.url, job.platform, job.preset, "error"
@@ -325,9 +418,7 @@ class JobQueue:
                 job, "❌ Beklenmeyen bir hata oluştu. Lütfen tekrar deneyin."
             )
         finally:
-            ticker.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await ticker
+            await self._stop_ticker(ticker)
             await asyncio.to_thread(shutil.rmtree, tmpdir, True)
             self._tmpdirs.discard(tmpdir)
 
@@ -335,12 +426,22 @@ class JobQueue:
 
     async def _process_gallery(self, job: Job) -> None:
         if self._gallery is None or not self._gallery.available:
-            await self._edit(job, "❌ Fotoğraf indirme bu sunucuda etkin değil.")
+            await self._status.edit(
+                job.chat_id,
+                job.status_message_id,
+                render_job_status(
+                    job.status_header,
+                    "error",
+                    "❌ Fotoğraf indirme bu sunucuda etkin değil.",
+                    last_stage=job.status_stage,
+                ),
+                wait=True,
+            )
             return
 
         tmpdir = await self._mkdtemp(job)
         try:
-            await self._edit(job, "🖼 <b>Medya indiriliyor…</b>")
+            await self._set_stage(job, "download", "🖼 <b>Medya indiriliyor…</b>")
             files = await asyncio.to_thread(self._gallery.download, job.url, tmpdir)
             total = sum(path.stat().st_size for path in files)
             if total > self._settings.max_upload_bytes:
@@ -348,6 +449,9 @@ class JobQueue:
                     f"Gönderi {human_size(total)} boyutunda. Telegram limiti "
                     f"{self._settings.max_upload_mb} MB."
                 )
+            await self._set_stage(
+                job, "sending", f"📤 <b>Gönderiliyor…</b> ({human_size(total)})"
+            )
             await self._send_gallery(job, files)
             await self._db.record_download(
                 job.user_id, job.url, job.platform, "gallery", "ok", total
@@ -605,12 +709,31 @@ class JobQueue:
                 log.debug("Gecici giris temizlenemedi: %s", entry)
         return removed
 
+    async def _stop_ticker(self, ticker: asyncio.Task[None] | None) -> None:
+        if ticker is None:
+            return
+        ticker.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await ticker
+
     async def _progress_loop(self, job: Job, state: dict[str, Any]) -> None:
         while True:
-            # Cok sik duzenleme Telegram flood limitine takilabilir.
-            await asyncio.sleep(8)
+            await asyncio.sleep(self._progress_interval)
+            if job.status_stage != "download":
+                return
             with contextlib.suppress(Exception):
-                await self._edit(job, render_progress(state))
+                await self._set_stage(job, "download", render_progress(state))
+
+    async def _set_stage(self, job: Job, stage: str, detail: str | None = None) -> None:
+        """Tek durum mesajindaki asamayi gunceller (yeni mesaj gondermez)."""
+        if job.status_stage == "error" and stage != "error":
+            return
+        job.status_stage = stage
+        await self._status.edit(
+            job.chat_id,
+            job.status_message_id,
+            render_job_status(job.status_header, stage, detail),
+        )
 
     def _targets(self, job: Job) -> list[tuple[int, int]]:
         return [(job.chat_id, job.status_message_id)]
@@ -633,42 +756,25 @@ class JobQueue:
 
     async def _fail(self, job: Job, text: str) -> None:
         self._remember_retry(job)
-        await self._edit(job, text, keyboard=self._retry_keyboard(job))
+        last_stage = job.status_stage
+        job.status_stage = "error"
+        await self._status.edit(
+            job.chat_id,
+            job.status_message_id,
+            render_job_status(
+                job.status_header,
+                "error",
+                text,
+                last_stage=last_stage,
+            ),
+            keyboard=self._retry_keyboard(job),
+            wait=True,
+        )
 
     async def _delete(self, job: Job) -> None:
-        """Basarili gonderimden sonra durum mesajlarini siler."""
+        """Basarili gonderimden sonra durum mesajini siler."""
         for chat_id, message_id in self._targets(job):
-            try:
-                await self._bot.delete_message(
-                    chat_id=chat_id, message_id=message_id
-                )
-            except TelegramBadRequest as exc:
-                log.debug("Durum mesaji silinemedi (%s): %s", job.id, exc)
-            except TelegramForbiddenError:
-                pass
-
-    async def _edit(
-        self,
-        job: Job,
-        text: str,
-        *,
-        preview: bool = False,
-        keyboard: Any = None,
-    ) -> None:
-        for chat_id, message_id in self._targets(job):
-            try:
-                await self._bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=message_id,
-                    text=text,
-                    reply_markup=keyboard,
-                    link_preview_options=LinkPreviewOptions(is_disabled=not preview),
-                )
-            except TelegramBadRequest as exc:
-                if "message is not modified" not in str(exc).lower():
-                    log.debug("Mesaj duzenlenemedi (%s): %s", job.id, exc)
-            except TelegramForbiddenError:
-                pass
+            await self._status.delete(chat_id, message_id)
 
 
 def _file_id(message: Message, kind: str) -> str | None:

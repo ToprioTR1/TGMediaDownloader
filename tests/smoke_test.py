@@ -32,7 +32,9 @@ os.environ["COOKIES_FILE"] = ""
 sys.path.insert(0, str(ROOT))
 
 from aiogram import Dispatcher  # noqa: E402
+from aiogram.exceptions import TelegramNetworkError, TelegramRetryAfter  # noqa: E402
 from aiogram.fsm.storage.memory import MemoryStorage  # noqa: E402
+from aiogram.methods import EditMessageText  # noqa: E402
 from aiogram.types import (  # noqa: E402
     Audio,
     CallbackQuery,
@@ -61,6 +63,7 @@ from bot.handlers.download import (  # noqa: E402
 )
 from bot.middlewares import UserMiddleware  # noqa: E402
 from bot.queue import Job, JobQueue  # noqa: E402
+from bot.status import StatusHub  # noqa: E402
 from bot.utils import nearest_height, parse_quality, wants_document  # noqa: E402
 
 URL = "https://www.tiktok.com/@tiktok/video/7106594312292453675"
@@ -80,6 +83,10 @@ class FakeBot:
         self.message_id = 100
         self.calls: list[tuple[str, dict]] = []
         self.texts: dict[int, str] = {}
+        self.edit_failures: list[Exception] = []
+        self.edit_attempts = 0
+        self.active_edits = 0
+        self.max_active_edits = 0
 
     def _msg(self, chat_id: int, **extra) -> Message:
         self.message_id += 1
@@ -100,12 +107,21 @@ class FakeBot:
         return msg
 
     async def edit_message_text(self, chat_id=None, message_id=None, text=None, **kwargs):
-        if message_id:
-            self.texts[message_id] = text or ""
-        self.calls.append(
-            ("edit_message_text", {"message_id": message_id, "text": text, **kwargs})
-        )
-        return self._msg(chat_id or 0, text=text or "")
+        self.edit_attempts += 1
+        self.active_edits += 1
+        self.max_active_edits = max(self.max_active_edits, self.active_edits)
+        try:
+            await asyncio.sleep(0)
+            if self.edit_failures:
+                raise self.edit_failures.pop(0)
+            if message_id:
+                self.texts[message_id] = text or ""
+            self.calls.append(
+                ("edit_message_text", {"message_id": message_id, "text": text, **kwargs})
+            )
+            return self._msg(chat_id or 0, text=text or "")
+        finally:
+            self.active_edits -= 1
 
     async def edit_message_reply_markup(self, **kwargs):
         self.calls.append(("edit_message_reply_markup", kwargs))
@@ -294,7 +310,16 @@ async def main() -> int:
     bot = FakeBot()
     downloader = Downloader(settings)
     gallery = GalleryDownloader(settings)
-    queue = JobQueue(bot, db, settings, downloader, gallery)
+    queue = JobQueue(
+        bot,
+        db,
+        settings,
+        downloader,
+        gallery,
+        status_min_interval=0.01,
+        status_progress_interval=0.05,
+        status_retry_backoff=0.01,
+    )
 
     dp = Dispatcher(
         storage=MemoryStorage(),
@@ -636,7 +661,16 @@ async def main() -> int:
         print("17) promote + demote OK")
 
         # 18) ayni link tekrar kuyruga alinmaz, fazladan mesaj acilmaz
-        q2 = JobQueue(bot, db, settings, downloader, gallery)
+        q2 = JobQueue(
+            bot,
+            db,
+            settings,
+            downloader,
+            gallery,
+            status_min_interval=0.01,
+            status_progress_interval=0.05,
+            status_retry_backoff=0.01,
+        )
         j1 = Job(
             id="dedup1",
             user_id=ADMIN.id,
@@ -678,7 +712,16 @@ async def main() -> int:
         print("18) ayni link dedup OK")
 
         # 19) hata sonrasi yeniden dene
-        q3 = JobQueue(bot, db, settings, downloader, gallery)
+        q3 = JobQueue(
+            bot,
+            db,
+            settings,
+            downloader,
+            gallery,
+            status_min_interval=0.01,
+            status_progress_interval=0.05,
+            status_retry_backoff=0.01,
+        )
         failed = Job(
             id="fail1",
             user_id=ADMIN.id,
@@ -697,15 +740,15 @@ async def main() -> int:
         )
         check(
             any(
-                "Yeniden deneniyor" in t
-                for t in bot.texts_since(mark, "edit_message_text")
+                c[0] == "edit_message_text"
+                and c[1].get("message_id") == 9010
+                and "Sırada" in (c[1].get("text") or "")
+                for c in bot.calls[mark:]
             ),
             "retry mevcut mesaji duzenlemedi",
         )
         check(
-            not any(
-                "Yeniden deneniyor" in t for t in bot.texts_since(mark)
-            ),
+            not any("Sırada" in t for t in bot.texts_since(mark)),
             "retry yeni mesaj gonderdi",
         )
         retry_job = q3._jobs.get((ADMIN.id, ADMIN.id, failed.url, failed.preset))
@@ -859,8 +902,115 @@ async def main() -> int:
             downloader.probe = original_probe  # type: ignore[method-assign]
         print("24) kesif hatasi retry OK")
 
+        # 25) durum mesaji: birlestirme, no-op, RetryAfter, ag hatasi, seri guncelleme
+        hub = StatusHub(
+            bot,
+            min_interval=0.01,
+            progress_interval=0.05,
+            retry_backoff=0.01,
+        )
+        try:
+            status = await hub.send(ADMIN.id, "durum 0")
+            card = hub._cards[(ADMIN.id, status.message_id)]
+
+            mark = len(bot.calls)
+            await hub.edit(ADMIN.id, status.message_id, "durum 1")
+            await hub.edit(ADMIN.id, status.message_id, "durum 2")
+            await hub.edit(ADMIN.id, status.message_id, "durum 3")
+            await card.flush()
+            edits = [
+                c for c in bot.calls[mark:] if c[0] == "edit_message_text"
+            ]
+            check(
+                len(edits) == 1 and edits[0][1].get("text") == "durum 3",
+                f"durum guncellemeleri birlestirilmedi: {edits}",
+            )
+
+            mark = len(bot.calls)
+            await hub.edit(ADMIN.id, status.message_id, "durum 3", wait=True)
+            check(
+                not any(c[0] == "edit_message_text" for c in bot.calls[mark:]),
+                "degismeyen mesaj tekrar duzenlendi",
+            )
+
+            bot.edit_failures.append(
+                TelegramRetryAfter(
+                    method=EditMessageText(
+                        chat_id=ADMIN.id,
+                        message_id=status.message_id,
+                        text="429",
+                    ),
+                    message="Too Many Requests",
+                    retry_after=0,
+                )
+            )
+            mark = len(bot.calls)
+            await hub.edit(ADMIN.id, status.message_id, "retry after", wait=True)
+            check(
+                any(
+                    c[0] == "edit_message_text"
+                    and c[1].get("text") == "retry after"
+                    for c in bot.calls[mark:]
+                ),
+                "RetryAfter sonrasi guncelleme uygulanmadi",
+            )
+
+            bot.edit_failures.extend(
+                [
+                    TelegramNetworkError(
+                        method=EditMessageText(
+                            chat_id=ADMIN.id,
+                            message_id=status.message_id,
+                            text="ag",
+                        ),
+                        message="network",
+                    ),
+                    TelegramNetworkError(
+                        method=EditMessageText(
+                            chat_id=ADMIN.id,
+                            message_id=status.message_id,
+                            text="ag",
+                        ),
+                        message="network",
+                    ),
+                ]
+            )
+            mark = len(bot.calls)
+            await hub.edit(ADMIN.id, status.message_id, "ag sonrasi", wait=True)
+            check(
+                any(
+                    c[0] == "edit_message_text"
+                    and c[1].get("text") == "ag sonrasi"
+                    for c in bot.calls[mark:]
+                ),
+                "ag hatasi sonrasi guncelleme uygulanmadi",
+            )
+
+            # Iki farkli mesaj ayni sohbette ayni anda duzenlenmeye calisilirsa
+            # Telegram cagrilari ust uste binmemeli.
+            second = await hub.send(ADMIN.id, "ikinci durum")
+            bot.max_active_edits = 0
+            await asyncio.gather(
+                hub.edit(ADMIN.id, status.message_id, "paralel 1", wait=True),
+                hub.edit(ADMIN.id, second.message_id, "paralel 2", wait=True),
+            )
+            check(
+                bot.max_active_edits <= 1,
+                f"ayni sohbette eszamanli duzenleme: {bot.max_active_edits}",
+            )
+
+            mark = len(bot.calls)
+            await hub.delete(ADMIN.id, status.message_id)
+            check(
+                any(c[0] == "delete_message" for c in bot.calls[mark:]),
+                "durum mesaji silinmedi",
+            )
+        finally:
+            await hub.close()
+        print("25) durum mesaji hiz siniri OK")
+
         stats = await db.stats()
-        print("25) istatistikler:", stats)
+        print("26) istatistikler:", stats)
     except AssertionError as exc:
         print("HATA:", exc)
         return 1
