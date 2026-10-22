@@ -1,86 +1,93 @@
-# 🎬 Telegram Video İndirme Botu
+# 🎬 Telegram Video Downloader Bot
 
-Instagram, YouTube, TikTok, X (Twitter), Facebook ve yt-dlp'nin desteklediği
-yüzlerce siteden video indirip Telegram üzerinden gönderen bot.
+**Languages:** English · [Türkçe](README.tr.md)
 
-Python 3.12 + [aiogram 3](https://github.com/aiogram/aiogram) + [yt-dlp](https://github.com/yt-dlp/yt-dlp)
-ile yazıldı, Docker ile çalışacak şekilde hazırlandı.
+A bot that downloads videos from Instagram, YouTube, TikTok, X (Twitter),
+Facebook and hundreds of other sites supported by yt-dlp, then sends them back
+through Telegram.
 
-## Özellikler
+Built with Python 3.12 + [aiogram 3](https://github.com/aiogram/aiogram) +
+[yt-dlp](https://github.com/yt-dlp/yt-dlp) and ready to run with Docker.
 
-- 🔗 Bağlantı gönder → bot en uygun kalitede indirip gönderir
-- 🎯 Akıllı kalite: link sonuna `1080p` / `720p` / `4k` yazarsan en yakın mevcut kalite;
-  yazmazsan platform varsayılanı (Instagram 1280p, TikTok 1012p, YouTube 720p)
-- 📦 Boyut koruması: seçilen kalite `MAX_UPLOAD_MB` limitini aşacaksa otomatik bir alt kaliteye iner
-- 🎵 `mp3` / `ses` yazarak sadece ses indirme
-- ⚡️ `file_id` önbelleği: aynı video tekrar istenirse yeniden indirilmeden anında gönderilir
-- 🔘 Videoların altında `🔗 Kaynak` · `🎵 Ses olarak al` butonları
-- 📝 Medya açıklamasındaki (caption) ve yanıtlanan mesajdaki bağlantılar da işlenir
-- 🖼 Instagram fotoğraf / carousel gönderileri (gallery-dl ile, albüm olarak)
-- 🧵 Kuyruk sistemi: aynı anda N indirme, kullanıcı başına kuyruk limiti
-- ⏱ İlerleme mesajı (yüzde, hız, kalan süre)
-- 📉 Günlük indirme limiti ve spam koruması (cooldown)
-- ⭐ Yetki yükseltme: `/promote @kullanıcıadı` ile kullanıcının günlük limiti kaldırılır (`/demote` ile geri alınır)
-- 👤 Kullanıcı kaydı, indirme istatistikleri (SQLite)
-- 🛠 Admin paneli: `/stats`, `/users`, `/broadcast`
-- 🍪 Instagram/TikTok için `cookies.txt` desteği
-- 🔄 Docker açılışında yt-dlp + gallery-dl otomatik güncelleme (`AUTO_UPDATE_YTDLP=1`)
-- 🐳 Docker imajında ffmpeg hazır gelir
+## Features
 
-## Hızlı Başlangıç (Docker / VPS)
+- 🔗 Send a link → the bot downloads it in the best available quality and sends it back
+- 🎯 Smart quality: add `1080p` / `720p` / `4k` to the link for the nearest available
+  quality; without a quality it uses the platform default (Instagram 1280p,
+  TikTok 1012p, YouTube 720p)
+- 📦 Size guard: if the selected quality would exceed `MAX_UPLOAD_MB`, it automatically
+  steps down to the next lower quality
+- 🎵 Audio only with `mp3` / `ses` (`ses` is Turkish for "audio")
+- ⚡️ `file_id` cache: requesting the same video again sends it instantly without re-downloading
+- 🔘 `🔗 Source` · `🎵 Get audio` buttons under videos
+- 📝 Links in media captions and in replied-to messages are processed too
+- 🖼 Instagram photo / carousel posts (via gallery-dl, sent as an album)
+- 🧵 Job queue: N concurrent downloads, per-user queue limit
+- ⏱ Progress message (percentage, speed, ETA)
+- 📉 Daily download limit and spam protection (cooldown)
+- ⭐ Privilege promotion: `/promote @username` removes the user's daily limit
+  (`/demote` restores it)
+- 👤 User registration and download statistics (SQLite)
+- 🛠 Admin panel: `/stats`, `/users`, `/broadcast`
+- 🍪 `cookies.txt` support for Instagram/TikTok
+- 🔄 Automatic yt-dlp + gallery-dl update on Docker startup (`AUTO_UPDATE_YTDLP=1`)
+- 🐳 ffmpeg comes preinstalled in the Docker image
 
-### 1. Bot tokeni al
+## Quick Start (Docker / VPS)
 
-Telegram'da [@BotFather](https://t.me/BotFather) → `/newbot` → tokeni kopyala.
+### 1. Get a bot token
 
-Kendi Telegram kullanıcı ID'ni öğrenmek için [@userinfobot](https://t.me/userinfobot)
-kullanabilirsin (admin komutları için gerekli).
+In Telegram, open [@BotFather](https://t.me/BotFather) → `/newbot` → copy the token.
 
-### 2. Projeyi sunucuya kopyala
+To find your own Telegram user ID, you can use
+[@userinfobot](https://t.me/userinfobot) (needed for admin commands).
+
+### 2. Copy the project to your server
 
 ```bash
 git clone <repo> video-bot && cd video-bot
-# ya da dosyaları scp/rsync ile at
+# or upload the files with scp/rsync
 ```
 
-### 3. Ayarları gir
+### 3. Configure
 
 ```bash
 cp .env.example .env
 nano .env
 ```
 
-En az şunları doldur:
+At minimum, fill in:
 
 ```env
 BOT_TOKEN=123456789:AA...
 ADMIN_IDS=123456789
 ```
 
-### 4. Çalıştır
+### 4. Run
 
 ```bash
 docker compose up -d --build
 docker compose logs -f bot
 ```
 
-Logda `Bot calisiyor: @kullanici_adin (id=...)` görürsen hazır. Telegram'da
-`/start` yazıp test et.
+If you see `Bot calisiyor: @your_username (id=...)` in the logs, it is ready.
+Send `/start` in Telegram to test it.
 
-### 5. Güncel tut
+### 5. Keep it up to date
 
-yt-dlp platform değişikliklerine çok sık uyum sağlar. Docker imajı her açılışta
-`yt-dlp` ve `gallery-dl`'yi otomatik günceller (`AUTO_UPDATE_YTDLP=1`, varsayılan).
-Güncelleme başarısız olursa bot mevcut sürümle açılmaya devam eder.
+yt-dlp adapts to platform changes very frequently. The Docker image updates
+`yt-dlp` and `gallery-dl` automatically on every startup
+(`AUTO_UPDATE_YTDLP=1`, the default). If an update fails, the bot keeps running
+with the current version.
 
-Otomatik güncellemeyi kapatmak için `.env` dosyasına `AUTO_UPDATE_YTDLP=0` ekleyin.
-Bu durumda imajı ara ara yeniden derleyin:
+To disable automatic updates, add `AUTO_UPDATE_YTDLP=0` to `.env`.
+In that case, rebuild the image from time to time:
 
 ```bash
 docker compose build --no-cache && docker compose up -d
 ```
 
-## Docker Olmadan Çalıştırma
+## Running Without Docker
 
 Linux:
 
@@ -88,7 +95,7 @@ Linux:
 sudo apt update && sudo apt install -y ffmpeg python3-venv
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env    # .env'i düzenle
+cp .env.example .env    # edit .env
 export DOWNLOAD_DIR=./data/downloads DB_PATH=./data/bot.db
 python -m bot
 ```
@@ -96,165 +103,168 @@ python -m bot
 Windows (PowerShell):
 
 ```powershell
-winget install Gyan.FFmpeg          # ffmpeg gerekli
+winget install Gyan.FFmpeg          # ffmpeg is required
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-Copy-Item .env.example .env         # .env'i düzenle
+Copy-Item .env.example .env         # edit .env
 $env:DOWNLOAD_DIR=".\data\downloads"; $env:DB_PATH=".\data\bot.db"
 python -m bot
 ```
 
-> `.env` içindeki `DOWNLOAD_DIR`, `DB_PATH` ve `COOKIES_FILE` yolları Docker
-> içindir (`/data/...`). Yerelde çalıştırırken bunları `.\data\...` olarak
-> değiştirin veya yukarıdaki gibi ortam değişkeni olarak verin.
+> The `DOWNLOAD_DIR`, `DB_PATH` and `COOKIES_FILE` paths in `.env` are intended
+> for Docker (`/data/...`). When running locally, change them to `.\data\...`
+> or pass them as environment variables as shown above.
 
-## Yapılandırma
+## Configuration
 
-Tüm ayarlar `.env` üzerinden okunur ([bot/config.py](bot/config.py)):
+All settings are read from `.env` ([bot/config.py](bot/config.py)):
 
-| Değişken | Varsayılan | Açıklama |
+| Variable | Default | Description |
 |---|---|---|
-| `BOT_TOKEN` | — | **Zorunlu.** BotFather tokeni |
-| `ADMIN_IDS` | boş | Virgülle ayrılmış admin ID'leri |
-| `CONCURRENCY` | `2` | Aynı anda çalışan indirme sayısı |
-| `MAX_UPLOAD_MB` | `50` | Telegram'a gönderilebilecek maks. boyut |
-| `MAX_HEIGHT` | `0` | Bu çözünürlüğün üstünü listede gösterme (0 = sınırsız) |
-| `MAX_DURATION_SEC` | `1800` | Maks. video süresi (0 = sınırsız) |
-| `MAX_QUEUE_PER_USER` | `3` | Kullanıcı başına bekleyen iş limiti |
-| `DAILY_LIMIT` | `20` | Günlük indirme limiti (0 = sınırsız) |
-| `COOLDOWN_SEC` | `10` | İki istek arası minimum süre |
-| `QUALITY_INSTAGRAM` | `1280` | Kalite yazılmayan Instagram linklerinde hedef |
-| `QUALITY_TIKTOK` | `1012` | Kalite yazılmayan TikTok linklerinde hedef |
-| `QUALITY_YOUTUBE` | `720` | Kalite yazılmayan YouTube linklerinde hedef |
-| `QUALITY_DEFAULT` | `720` | Diğer platformlar için hedef |
-| `CACHE_DAYS` | `30` | `file_id` önbellek süresi, gün (0 = kapalı) |
-| `GALLERY_ENABLED` | `1` | Instagram fotoğraf/carousel desteği (gallery-dl) |
-| `GALLERY_LIMIT` | `10` | Gönderi başına en fazla medya (Telegram albüm limiti 10) |
-| `AUTO_UPDATE_YTDLP` | `1` | Docker açılışında yt-dlp + gallery-dl güncelle |
-| `COOKIES_FILE` | — | `cookies.txt` yolu (çerez gereken siteler için) |
-| `TELEGRAM_API_URL` | boş | Yerel Bot API sunucusu adresi |
-| `PROXY_URL` | boş | İndirmeler için HTTP(S)/SOCKS proxy |
-| `DOWNLOAD_DIR` | `./data/downloads` | Geçici indirme klasörü |
-| `DB_PATH` | `./data/bot.db` | SQLite veritabanı |
-| `LOG_LEVEL` | `INFO` | Log seviyesi |
+| `BOT_TOKEN` | — | **Required.** BotFather token |
+| `ADMIN_IDS` | empty | Comma-separated admin IDs |
+| `CONCURRENCY` | `2` | Number of concurrent downloads |
+| `MAX_UPLOAD_MB` | `50` | Maximum size that can be sent to Telegram |
+| `MAX_HEIGHT` | `0` | Hide resolutions above this from the format list (0 = unlimited) |
+| `MAX_DURATION_SEC` | `1800` | Maximum video duration (0 = unlimited) |
+| `MAX_QUEUE_PER_USER` | `3` | Pending jobs per user |
+| `DAILY_LIMIT` | `20` | Daily download limit (0 = unlimited) |
+| `COOLDOWN_SEC` | `10` | Minimum seconds between two requests |
+| `QUALITY_INSTAGRAM` | `1280` | Target for Instagram links without a quality |
+| `QUALITY_TIKTOK` | `1012` | Target for TikTok links without a quality |
+| `QUALITY_YOUTUBE` | `720` | Target for YouTube links without a quality |
+| `QUALITY_DEFAULT` | `720` | Target for other platforms |
+| `CACHE_DAYS` | `30` | `file_id` cache lifetime in days (0 = disabled) |
+| `GALLERY_ENABLED` | `1` | Instagram photo/carousel support (gallery-dl) |
+| `GALLERY_LIMIT` | `10` | Maximum media per post (Telegram album limit is 10) |
+| `AUTO_UPDATE_YTDLP` | `1` | Update yt-dlp + gallery-dl on Docker startup |
+| `COOKIES_FILE` | — | Path to `cookies.txt` (for sites that require cookies) |
+| `TELEGRAM_API_URL` | empty | Local Bot API server URL |
+| `PROXY_URL` | empty | HTTP(S)/SOCKS proxy for downloads |
+| `DOWNLOAD_DIR` | `./data/downloads` | Temporary download directory |
+| `DB_PATH` | `./data/bot.db` | SQLite database |
+| `LOG_LEVEL` | `INFO` | Log level |
 
-## Instagram / TikTok için Çerezler
+## Cookies for Instagram / TikTok
 
-Instagram (ve bazen TikTok, YouTube) giriş istediğinde bot "Bu içerik için
-giriş gerekiyor" der. Çözüm: tarayıcıdan çerez dosyası çıkarmak.
+When Instagram (and sometimes TikTok or YouTube) asks for a login, the bot says
+"This content requires a login". The fix is to export a cookie file from your
+browser.
 
-1. Tarayıcıya **"Get cookies.txt LOCALLY"** (Chrome/Firefox) eklentisini kur.
-2. Instagram'a giriş yap → eklenti → `instagram.com` için **Export as Netscape**.
-3. Dosyayı sunucuda `data/cookies.txt` olarak kaydet:
-   `scp cookies.txt kullanici@sunucu:~/video-bot/data/cookies.txt`
+1. Install the **"Get cookies.txt LOCALLY"** extension (Chrome/Firefox).
+2. Log in to Instagram → extension → **Export as Netscape** for `instagram.com`.
+3. Save the file on the server as `data/cookies.txt`:
+   `scp cookies.txt user@server:~/video-bot/data/cookies.txt`
 4. `docker compose restart bot`
 
-> İpucu: Çerezler kişisel hesabınıza ait. Mümkünse bot için ayrı bir hesap
-> kullanın; çerezler süresi doldukça (genelde haftalar) yenilemeniz gerekir.
+> Tip: cookies belong to your personal account. Use a separate account for the
+> bot if possible; cookies expire over time (usually after a few weeks) and must
+> be refreshed.
 
-## 50 MB Üstü Videolar (Yerel Bot API Sunucusu)
+## Videos Over 50 MB (Local Bot API Server)
 
-Telegram bulut API'si botların 50 MB'tan büyük dosya yüklemesine izin vermez.
-Sınırı 2 GB'a çıkarmak için kendi Bot API sunucunuzu çalıştırabilirsiniz:
+The Telegram cloud API does not allow bots to upload files larger than 50 MB.
+To raise the limit to 2 GB, you can run your own Bot API server:
 
-1. https://my.telegram.org → API development tools → `api_id` ve `api_hash` al.
-2. `.env` dosyasına ekle:
+1. https://my.telegram.org → API development tools → get `api_id` and `api_hash`.
+2. Add them to `.env`:
 
 ```env
 TELEGRAM_API_ID=123456
 TELEGRAM_API_HASH=abcdef1234567890
 ```
 
-3. Hazır override dosyasıyla başlat:
+3. Start with the ready-made override file:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.local-api.yml up -d --build
 ```
 
-Bu dosya `aiogram/telegram-bot-api` imajını ayağa kaldırır, botu ona bağlar ve
-`MAX_UPLOAD_MB` değerini `2000` yapar.
+This file starts the `aiogram/telegram-bot-api` image, connects the bot to it,
+and sets `MAX_UPLOAD_MB` to `2000`.
 
-## Kullanım
+## Usage
 
-1. Bota bir bağlantı gönder: `https://www.instagram.com/reel/...`
-2. Bot kaliteyi otomatik seçer ve indirmeye başlar.
-3. İlerleme mesajı güncellenir, video hazır olunca gönderilir; gönderim
-   başarılı olursa durum mesajı silinir (sohbette sadece medya kalır).
-4. Gönderilen videonun altındaki butonlarla kaynağa gidebilir veya sesini alabilirsin.
+1. Send a link to the bot: `https://www.instagram.com/reel/...`
+2. The bot picks the quality automatically and starts downloading.
+3. The progress message is updated; when the video is ready it is sent. If
+   sending succeeds, the status message is deleted (only the media remains in
+   the chat).
+4. Use the buttons under the video to open the source or get its audio.
 
-Aynı video ikinci kez istendiğinde `file_id` önbelleğinden **anında** gönderilir.
-Gönderi açıklamasında (caption) link varsa veya linki bir mesajı yanıtlayarak
-gönderirsen de çalışır: gönderiyi yanıtla, sadece `720p` yaz.
+Requesting the same video a second time sends it **instantly** from the
+`file_id` cache. It also works when the link is in a post caption or when you
+reply to a message with a link: reply to the post and just type `720p`.
 
-### Kalite kuralları
+### Quality rules
 
-| Mesaj | Sonuç |
+| Message | Result |
 |---|---|
-| `https://...` | Platform varsayılanı: Instagram **1280p**, TikTok **1012p**, YouTube **720p**, diğerleri 720p |
-| `https://... 1080p` | En yakın mevcut kalite (ör. sadece 1280p varsa **1280p**) |
-| `https://... 720p` | 720p'ye en yakın mevcut kalite |
-| `https://... 4k` | 4K (2160p) en yakın kalite |
-| `https://... mp3` | Sadece ses (MP3 192 kbps) |
+| `https://...` | Platform default: Instagram **1280p**, TikTok **1012p**, YouTube **720p**, others 720p |
+| `https://... 1080p` | Nearest available quality (e.g. **1280p** if that is the only option) |
+| `https://... 720p` | Nearest available quality to 720p |
+| `https://... 4k` | Nearest available quality to 4K (2160p) |
+| `https://... mp3` | Audio only (MP3 192 kbps) |
 
-Varsayılanlar `.env` içindeki `QUALITY_*` değişkenleriyle değiştirilebilir.
-Seçilen kalitenin tahmini boyutu `MAX_UPLOAD_MB` limitini aşacaksa bot
-indirmeden önce bir alt kaliteye iner; hiçbiri sığmıyorsa net bir hata gösterir.
-Bir mesajda en fazla 3 bağlantı işlenir.
+Defaults can be changed with the `QUALITY_*` variables in `.env`.
+If the estimated size of the selected quality exceeds `MAX_UPLOAD_MB`, the bot
+steps down to a lower quality before downloading; if none fit, it shows a clear
+error. At most 3 links are processed per message.
 
-### Komutlar
+### Commands
 
-| Komut | Kim | Açıklama |
+| Command | Who | Description |
 |---|---|---|
-| `/start` | herkes | Karşılama |
-| `/help` | herkes | Platformlar ve limitler |
-| `/me` | herkes | Kendi kullanım istatistikleri |
-| `/admin` | admin | Butonlu admin paneli |
-| `/stats` | admin | Kullanıcı/indirme istatistikleri |
-| `/users` | admin | Son 10 kullanıcı (`⭐` = sınırsız hak) |
-| `/broadcast <mesaj>` | admin | Herkese duyuru |
-| `/promote @kullanıcıadı` | admin | Kullanıcıya sınırsız günlük indirme hakkı ver (mesaja yanıt da olur) |
-| `/demote @kullanıcıadı` | admin | Sınırsız hakkı geri al |
+| `/start` | everyone | Welcome message |
+| `/help` | everyone | Platforms and limits |
+| `/me` | everyone | Your own usage statistics |
+| `/admin` | admin | Admin panel with buttons |
+| `/stats` | admin | User/download statistics |
+| `/users` | admin | Last 10 users (`⭐` = unlimited access) |
+| `/broadcast <message>` | admin | Send an announcement to everyone |
+| `/promote @username` | admin | Grant unlimited daily downloads (replying to a message also works) |
+| `/demote @username` | admin | Revoke unlimited access |
 
-`/promote` ile yetkilendirilen kullanıcıya günlük indirme limiti uygulanmaz.
-Hak, `/demote` yazılana kadar geçerlidir. Kullanıcı `/me` çıktısında
-`⭐ Sınırsız indirme hakkı: aktif` satırını görür.
+Users promoted with `/promote` are not subject to the daily download limit.
+The privilege remains until `/demote` is used. The user sees
+`⭐ Sınırsız indirme hakkı: aktif` (unlimited download access: active) in `/me`.
 
-Kullanıcı adıyla yetkilendirme için kullanıcının bota en az bir kez yazmış
-olması gerekir (botun kullanıcı adından ID çözebilmesi için). Alternatif olarak
-kullanıcının mesajına yanıt verip `/promote` yazabilirsiniz. `t.me/kullaniciadi`
-biçimi ve büyük/küçük harf farkı da desteklenir.
+Promoting by username requires the user to have messaged the bot at least once
+(so the bot can resolve the username to an ID). Alternatively, reply to the
+user's message with `/promote`. The `t.me/username` format is supported too,
+and usernames are matched case-insensitively.
 
-## Proje Yapısı
+## Project Structure
 
 ```
 bot/
-├── __main__.py      # giriş noktası, dispatcher/middleware kurulumu
-├── config.py        # .env → Settings (+ platform kalite varsayılanları)
-├── database.py      # SQLite: kullanıcılar, indirmeler, file_id önbelleği
-├── downloader.py    # yt-dlp: probe (metadata + boyut tahmini) + indirme
-├── gallery.py       # gallery-dl: Instagram fotoğraf/carousel indirme
-├── queue.py         # iş kuyruğu, işçiler, ilerleme, önbellek, Telegram gönderimi
-├── keyboards.py     # inline klavyeler (video aksiyonları, admin paneli)
-├── middlewares.py   # kullanıcı kaydı
-├── utils.py         # URL/kalite ayrıştırma, önbellek anahtarı, biçimlendirme
+├── __main__.py      # entry point, dispatcher/middleware setup
+├── config.py        # .env → Settings (+ per-platform quality defaults)
+├── database.py      # SQLite: users, downloads, file_id cache
+├── downloader.py    # yt-dlp: probe (metadata + size estimate) + download
+├── gallery.py       # gallery-dl: Instagram photo/carousel download
+├── queue.py         # job queue, workers, progress, cache, Telegram delivery
+├── keyboards.py     # inline keyboards (video actions, admin panel)
+├── middlewares.py   # user registration
+├── utils.py         # URL/quality parsing, cache key, formatting
 └── handlers/
     ├── start.py     # /start /help /me
-    ├── download.py  # link/caption/yanıt → kalite + boyut çözümleme → kuyruk
-    └── admin.py     # admin komutları (promote/demote dahil)
+    ├── download.py  # link/caption/reply → quality + size resolution → queue
+    └── admin.py     # admin commands (including promote/demote)
 ```
 
-Akış: `handlers/download.py` → `downloader.probe()` → `utils.nearest_height()`
-(+ boyut koruması) → `queue.JobQueue.submit()` → işçi `downloader.download()`
+Flow: `handlers/download.py` → `downloader.probe()` → `utils.nearest_height()`
+(+ size guard) → `queue.JobQueue.submit()` → worker `downloader.download()`
 → `bot.send_video()` → `database.cache_put()` + `database.record_download()`.
-Instagram fotoğraf gönderilerinde yt-dlp başarısız olursa `gallery.py` devreye girer.
+For Instagram photo posts, `gallery.py` takes over if yt-dlp fails.
 
-## Test
+## Tests
 
-`tests/smoke_test.py` sahte bir Bot nesnesiyle uçtan uca akışı dener (gerçek
-ağdan küçük bir TikTok videosu indirir; varsayılan/istenen kalite, MP3,
-file_id önbelleği, caption ve yanıt desteği, boyut koruması, gallery-dl ile
-fotoğraf gönderimi, DB ve admin adımlarını kontrol eder):
+`tests/smoke_test.py` exercises the end-to-end flow with a fake Bot object (it
+downloads a small TikTok video from the real network and checks default/requested
+quality, MP3, the file_id cache, caption and reply support, the size guard,
+photo delivery via gallery-dl, and the DB and admin steps):
 
 ```bash
 pip install -r requirements.txt
@@ -262,30 +272,35 @@ $env:PYTHONPATH="." ; python tests/smoke_test.py    # PowerShell
 PYTHONPATH=. python tests/smoke_test.py             # bash
 ```
 
-Test kendi verisini `.tmp/` altında oluşturur ve Telegram'a gerçek istek atmaz.
+The test creates its own data under `.tmp/` and does not make real requests to
+Telegram.
 
-## Sorun Giderme
+## Troubleshooting
 
-| Belirti | Çözüm |
+| Symptom | Fix |
 |---|---|
-| `Bu içerik için giriş gerekiyor` | `data/cookies.txt` ekle, `docker compose restart bot` |
-| `HTTP Error 403` / `429` | Çerezleri yenile, birkaç dakika bekle, VPS IP'si engellenmiş olabilir |
-| `Sign in to confirm you're not a bot` (YouTube) | Çerez ekle veya `PROXY_URL` tanımla |
-| `ffmpeg bulunamadı` | Docker imajında var; yerelde `apt install ffmpeg` / `winget install Gyan.FFmpeg` |
-| İndirme çalışmıyor, başka site çalışıyor | `docker compose restart bot` (açılışta yt-dlp güncellenir) veya `docker compose build --no-cache` |
-| Instagram fotoğrafı inmiyor | `gallery-dl` kurulu mu? (`GALLERY_ENABLED=1`); özel gönderiler için `cookies.txt` gerekir |
-| `Request Entity Too Large` | 50 MB limiti; daha düşük kalite seç veya yerel Bot API kur |
-| Bot cevap vermiyor | `docker compose logs -f bot`; webhook varsa silinir, polling kullanılır |
+| `Bu içerik için giriş gerekiyor` (login required) | Add `data/cookies.txt`, then `docker compose restart bot` |
+| `HTTP Error 403` / `429` | Refresh cookies, wait a few minutes; the VPS IP may be blocked |
+| `Sign in to confirm you're not a bot` (YouTube) | Add cookies or configure `PROXY_URL` |
+| `ffmpeg bulunamadı` (ffmpeg not found) | It is included in the Docker image; locally run `apt install ffmpeg` / `winget install Gyan.FFmpeg` |
+| One site stops working while others work | `docker compose restart bot` (yt-dlp updates on startup) or `docker compose build --no-cache` |
+| Instagram photos are not downloading | Is `gallery-dl` installed? (`GALLERY_ENABLED=1`); private posts require `cookies.txt` |
+| `Request Entity Too Large` | The 50 MB limit; choose a lower quality or set up a local Bot API server |
+| Bot does not respond | `docker compose logs -f bot`; any webhook is removed and polling is used |
 
-## Notlar
+## Notes
 
-- Videolar geçici klasörde tutulur ve gönderimden sonra silinir; sunucuda birikmez.
-- Başarılı gönderimden sonra ilerleme/durum mesajı silinir; sohbette sadece
-  gönderilen medya kalır. Hata durumunda mesaj açıklamayla birlikte kalır.
-- Instagram fotoğraf/carousel gönderileri gallery-dl ile indirilir; video içeren
-  gönderilerde kalite seçimi için yt-dlp kullanılır.
-- `file_id` önbelleği SQLite'ta tutulur (`CACHE_DAYS`, varsayılan 30 gün).
-  Telegram dosyayı reddederse önbellek otomatik temizlenir ve yeniden indirilir.
-- Canlı yayınlar desteklenmez.
-- Bu botu yalnızca indirmeye hakkınız olan içerikler ve platformların kullanım
-  koşullarına uygun şekilde kullanın. Sorumluluk kullanıcıya aittir.
+- Videos are kept in a temporary directory and deleted after sending; they do
+  not accumulate on the server.
+- After a successful send, the progress/status message is deleted; only the
+  delivered media remains in the chat. On error, the message stays with an
+  explanation.
+- Instagram photo/carousel posts are downloaded with gallery-dl; for posts that
+  contain video, yt-dlp is used for quality selection.
+- The `file_id` cache is stored in SQLite (`CACHE_DAYS`, 30 days by default).
+  If Telegram rejects a file, the cache entry is removed automatically and the
+  media is downloaded again.
+- Live streams are not supported.
+- Only use this bot for content you have the right to download and in
+  compliance with the platforms' terms of service. You are responsible for how
+  you use it.
