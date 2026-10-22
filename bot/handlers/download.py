@@ -275,10 +275,16 @@ async def on_text(
                 source_url=url,
             )
             try:
-                await queue.submit(job)
+                queued = await queue.submit(job)
             except QueueFullError as exc:
                 with suppress(TelegramBadRequest):
                     await status.edit_text(f"❌ {escape(str(exc))}")
+                continue
+            if not queued:
+                with suppress(TelegramBadRequest):
+                    await status.edit_text(
+                        "⏳ Bu gönderi zaten indiriliyor; bitince buraya da gönderilecek."
+                    )
             continue
 
         assert info is not None  # bu noktada her zaman dolu (yukarida kontrol edildi)
@@ -314,11 +320,16 @@ async def on_text(
             source_url=info.webpage_url,
         )
         try:
-            await queue.submit(job)
+            queued = await queue.submit(job)
         except QueueFullError as exc:
             with suppress(TelegramBadRequest):
                 await status.edit_text(f"❌ {escape(str(exc))}")
             continue
+        if not queued:
+            with suppress(TelegramBadRequest):
+                await status.edit_text(
+                    "⏳ Bu bağlantı zaten indiriliyor; bitince buraya da gönderilecek."
+                )
 
         log.info(
             "Kuyruga eklendi: kullanici=%s platform=%s hedef=%s secilen=%s preset=%s",
@@ -413,11 +424,13 @@ async def on_action(
             source_url=row.get("url"),
         )
         try:
-            await queue.submit(job)
+            queued = await queue.submit(job)
         except QueueFullError as exc:
             await callback.answer(str(exc), show_alert=True)
             return
-        await callback.answer("Sıraya alındı 🎵")
+        await callback.answer(
+            "Sıraya alındı 🎵" if queued else "Bu içerik zaten indiriliyor ⏳"
+        )
         return
 
     await callback.answer()

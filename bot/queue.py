@@ -52,6 +52,8 @@ class Job:
     kind: str = "ytdlp"  # ytdlp | gallery
     source_url: str | None = None
     enqueued_at: float = field(default_factory=time.time)
+    extra_targets: list[tuple[int, int]] = field(default_factory=list)
+    sending: bool = False
 
 
 class QueueFullError(Exception):
@@ -75,6 +77,7 @@ class JobQueue:
         self._queue: asyncio.Queue[Job] = asyncio.Queue()
         self._tasks: list[asyncio.Task[None]] = []
         self._pending: Counter[int] = Counter()
+        self._jobs: dict[tuple[int, str, str], Job] = {}
         self._active = 0
 
     # ------------------------------------------------------------------ yasam
@@ -106,15 +109,34 @@ class JobQueue:
     def active_count(self) -> int:
         return self._active
 
-    async def submit(self, job: Job) -> int:
+    async def submit(self, job: Job) -> bool:
+        """Isi kuyruga ekler.
+
+        Ayni kullanici ayni URL/preset icin zaten bekleyen bir is varsa yeni is
+        acilmaz; yeni durum mesaji mevcut ise baglanir. Yeni is eklendiyse True,
+        mevcut ise baglandiysa False doner.
+        """
+        key = (job.user_id, job.url, job.preset)
+        existing = self._jobs.get(key)
+        if existing is not None and existing is not job and not existing.sending:
+            existing.extra_targets.append((job.chat_id, job.status_message_id))
+            log.info(
+                "Ayni ise baglandi: kullanici=%s url=%s preset=%s",
+                job.user_id,
+                job.url,
+                job.preset,
+            )
+            return False
+
         if self._pending[job.user_id] >= self._settings.max_queue_per_user:
             raise QueueFullError(
                 "Aynı anda en fazla "
                 f"{self._settings.max_queue_per_user} indirme sıraya alabilirsiniz."
             )
         self._pending[job.user_id] += 1
+        self._jobs[key] = job
         self._queue.put_nowait(job)
-        return self._queue.qsize()
+        return True
 
     # ----------------------------------------------------------------- isciler
 
@@ -129,6 +151,9 @@ class JobQueue:
             except Exception:  # noqa: BLE001
                 log.exception("Isci %s beklenmeyen hata: %s", index, job.url)
             finally:
+                key = (job.user_id, job.url, job.preset)
+                if self._jobs.get(key) is job:
+                    self._jobs.pop(key, None)
                 self._active -= 1
                 self._pending[job.user_id] -= 1
                 if self._pending[job.user_id] <= 0:
@@ -145,6 +170,7 @@ class JobQueue:
                 job.url, job.preset, self._settings.cache_days
             )
             if cached is not None:
+                job.sending = True
                 try:
                     await self._send_cached(job, cached)
                 except TelegramBadRequest as exc:
@@ -187,6 +213,7 @@ class JobQueue:
                 )
 
             await self._edit(job, f"📤 <b>Gönderiliyor…</b> ({human_size(size)})")
+            job.sending = True
             file_id, media_type = await self._send(job, path)
             if file_id and self._settings.cache_days:
                 try:
@@ -254,6 +281,7 @@ class JobQueue:
                     f"Gönderi {human_size(total)} boyutunda. Telegram limiti "
                     f"{self._settings.max_upload_mb} MB."
                 )
+            job.sending = True
             await self._send_gallery(job, files)
             await self._db.record_download(
                 job.user_id, job.url, job.platform, "gallery", "ok", total
@@ -287,38 +315,40 @@ class JobQueue:
 
         if len(files) == 1:
             path = files[0]
-            file = FSInputFile(path, filename=path.name)
-            if path.suffix.lower() in VIDEO_EXT:
-                await self._bot.send_video(
-                    chat_id=job.chat_id,
-                    video=file,
-                    caption=caption,
-                    reply_markup=keyboard,
-                    supports_streaming=True,
-                )
-            else:
-                await self._bot.send_photo(
-                    chat_id=job.chat_id, photo=file, caption=caption, reply_markup=keyboard
-                )
+            for chat_id, _ in self._targets(job):
+                file = FSInputFile(path, filename=path.name)
+                if path.suffix.lower() in VIDEO_EXT:
+                    await self._bot.send_video(
+                        chat_id=chat_id,
+                        video=file,
+                        caption=caption,
+                        reply_markup=keyboard,
+                        supports_streaming=True,
+                    )
+                else:
+                    await self._bot.send_photo(
+                        chat_id=chat_id, photo=file, caption=caption, reply_markup=keyboard
+                    )
             return
 
-        media: list[InputMediaPhoto | InputMediaVideo] = []
-        for index, path in enumerate(files[:10]):
-            file = FSInputFile(path, filename=path.name)
-            item_caption = caption if index == 0 else None
-            if path.suffix.lower() in VIDEO_EXT:
-                media.append(
-                    InputMediaVideo(
-                        media=file, caption=item_caption, parse_mode=ParseMode.HTML
+        for chat_id, _ in self._targets(job):
+            media: list[InputMediaPhoto | InputMediaVideo] = []
+            for index, path in enumerate(files[:10]):
+                file = FSInputFile(path, filename=path.name)
+                item_caption = caption if index == 0 else None
+                if path.suffix.lower() in VIDEO_EXT:
+                    media.append(
+                        InputMediaVideo(
+                            media=file, caption=item_caption, parse_mode=ParseMode.HTML
+                        )
                     )
-                )
-            else:
-                media.append(
-                    InputMediaPhoto(
-                        media=file, caption=item_caption, parse_mode=ParseMode.HTML
+                else:
+                    media.append(
+                        InputMediaPhoto(
+                            media=file, caption=item_caption, parse_mode=ParseMode.HTML
+                        )
                     )
-                )
-        await self._bot.send_media_group(chat_id=job.chat_id, media=media)
+            await self._bot.send_media_group(chat_id=chat_id, media=media)
 
     # ------------------------------------------------------------- gonderim
 
@@ -333,28 +363,29 @@ class JobQueue:
             if self._settings.cache_days
             else gallery_keyboard(job.source_url)
         )
-        if media_type == "audio":
-            await self._bot.send_audio(
-                chat_id=job.chat_id,
-                audio=row["file_id"],
-                caption=caption,
-                reply_markup=keyboard,
-            )
-        elif media_type == "document":
-            await self._bot.send_document(
-                chat_id=job.chat_id,
-                document=row["file_id"],
-                caption=caption,
-                reply_markup=keyboard,
-            )
-        else:
-            await self._bot.send_video(
-                chat_id=job.chat_id,
-                video=row["file_id"],
-                caption=caption,
-                reply_markup=keyboard,
-                supports_streaming=True,
-            )
+        for chat_id, _ in self._targets(job):
+            if media_type == "audio":
+                await self._bot.send_audio(
+                    chat_id=chat_id,
+                    audio=row["file_id"],
+                    caption=caption,
+                    reply_markup=keyboard,
+                )
+            elif media_type == "document":
+                await self._bot.send_document(
+                    chat_id=chat_id,
+                    document=row["file_id"],
+                    caption=caption,
+                    reply_markup=keyboard,
+                )
+            else:
+                await self._bot.send_video(
+                    chat_id=chat_id,
+                    video=row["file_id"],
+                    caption=caption,
+                    reply_markup=keyboard,
+                    supports_streaming=True,
+                )
 
     async def _send(self, job: Job, path: Path) -> tuple[str | None, str]:
         size = path.stat().st_size
@@ -373,30 +404,50 @@ class JobQueue:
             if self._settings.cache_days
             else gallery_keyboard(job.source_url)
         )
-        file = FSInputFile(path, filename=path.name)
 
+        cached_file_id: str | None = None
+        cached_media_type = "video"
+        for index, (chat_id, _) in enumerate(self._targets(job)):
+            file = FSInputFile(path, filename=path.name)
+            msg, media_type = await self._send_file(
+                job, file, chat_id, caption, keyboard, is_audio
+            )
+            if index == 0:
+                cached_file_id = _file_id(msg, media_type)
+                cached_media_type = media_type
+        return cached_file_id, cached_media_type
+
+    async def _send_file(
+        self,
+        job: Job,
+        file: FSInputFile,
+        chat_id: int,
+        caption: str,
+        keyboard: Any,
+        is_audio: bool,
+    ) -> tuple[Message, str]:
         for attempt in range(2):
             try:
                 if is_audio:
                     msg: Message = await self._bot.send_audio(
-                        chat_id=job.chat_id,
+                        chat_id=chat_id,
                         audio=file,
                         caption=caption,
                         duration=job.duration or 0,
                         title=job.title[:64],
                         reply_markup=keyboard,
                     )
-                    return _file_id(msg, "audio"), "audio"
+                    return msg, "audio"
 
                 msg = await self._bot.send_video(
-                    chat_id=job.chat_id,
+                    chat_id=chat_id,
                     video=file,
                     caption=caption,
                     duration=job.duration or 0,
                     supports_streaming=True,
                     reply_markup=keyboard,
                 )
-                return _file_id(msg, "video"), "video"
+                return msg, "video"
             except TelegramRetryAfter as exc:
                 if attempt == 0:
                     await asyncio.sleep(exc.retry_after + 1)
@@ -411,13 +462,13 @@ class JobQueue:
                     ) from exc
                 log.warning("Video olarak gonderilemedi, belge olarak deneniyor: %s", exc)
                 msg = await self._bot.send_document(
-                    chat_id=job.chat_id,
+                    chat_id=chat_id,
                     document=file,
                     caption=caption,
                     reply_markup=keyboard,
                 )
-                return _file_id(msg, "document"), "document"
-        return None, "video"
+                return msg, "document"
+        raise RuntimeError("Medya gönderilemedi.")
 
     def _caption(self, job: Job, size: int) -> str:
         title = escape(job.title[:200])
@@ -443,31 +494,43 @@ class JobQueue:
             with contextlib.suppress(Exception):
                 await self._edit(job, render_progress(state))
 
-    async def _delete(self, job: Job) -> None:
-        """Basarili gonderimden sonra durum mesajini siler."""
-        try:
-            await self._bot.delete_message(
-                chat_id=job.chat_id, message_id=job.status_message_id
-            )
-        except TelegramBadRequest as exc:
-            log.debug("Durum mesaji silinemedi (%s): %s", job.id, exc)
-        except TelegramForbiddenError:
-            pass
+    def _targets(self, job: Job) -> list[tuple[int, int]]:
+        return [(job.chat_id, job.status_message_id), *job.extra_targets]
 
-    async def _edit(self, job: Job, text: str, *, preview: bool = False) -> None:
-        try:
-            await self._bot.edit_message_text(
-                chat_id=job.chat_id,
-                message_id=job.status_message_id,
-                text=text,
-                reply_markup=None,
-                link_preview_options=LinkPreviewOptions(is_disabled=not preview),
-            )
-        except TelegramBadRequest as exc:
-            if "message is not modified" not in str(exc).lower():
-                log.debug("Mesaj duzenlenemedi (%s): %s", job.id, exc)
-        except TelegramForbiddenError:
-            pass
+    async def _delete(self, job: Job) -> None:
+        """Basarili gonderimden sonra durum mesajlarini siler."""
+        for chat_id, message_id in self._targets(job):
+            try:
+                await self._bot.delete_message(
+                    chat_id=chat_id, message_id=message_id
+                )
+            except TelegramBadRequest as exc:
+                log.debug("Durum mesaji silinemedi (%s): %s", job.id, exc)
+            except TelegramForbiddenError:
+                pass
+
+    async def _edit(
+        self,
+        job: Job,
+        text: str,
+        *,
+        preview: bool = False,
+        keyboard: Any = None,
+    ) -> None:
+        for chat_id, message_id in self._targets(job):
+            try:
+                await self._bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=text,
+                    reply_markup=keyboard,
+                    link_preview_options=LinkPreviewOptions(is_disabled=not preview),
+                )
+            except TelegramBadRequest as exc:
+                if "message is not modified" not in str(exc).lower():
+                    log.debug("Mesaj duzenlenemedi (%s): %s", job.id, exc)
+            except TelegramForbiddenError:
+                pass
 
 
 def _file_id(message: Message, kind: str) -> str | None:

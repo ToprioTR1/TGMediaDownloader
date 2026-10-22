@@ -593,8 +593,51 @@ async def main() -> int:
             object.__setattr__(settings, "daily_limit", original_daily)
         print("17) promote + demote OK")
 
+        # 18) ayni link tekrar kuyruga alinmaz, mevcut ise baglanir
+        q2 = JobQueue(bot, db, settings, downloader, gallery)
+        j1 = Job(
+            id="dedup1",
+            user_id=ADMIN.id,
+            chat_id=ADMIN.id,
+            status_message_id=9001,
+            url="https://example.com/video",
+            preset="h:720",
+            title="Test",
+            platform="Test",
+        )
+        j2 = Job(
+            id="dedup2",
+            user_id=ADMIN.id,
+            chat_id=ADMIN.id,
+            status_message_id=9002,
+            url="https://example.com/video",
+            preset="h:720",
+            title="Test",
+            platform="Test",
+        )
+        check(await q2.submit(j1) is True, "ilk is kuyruga alinmadi")
+        check(await q2.submit(j2) is False, "ayni is tekrar kuyruga alindi")
+        check(
+            (ADMIN.id, 9002) in j1.extra_targets,
+            "ikinci durum mesaji mevcut ise baglanmadi",
+        )
+        j1.sending = True
+        j3 = Job(
+            id="dedup3",
+            user_id=ADMIN.id,
+            chat_id=ADMIN.id,
+            status_message_id=9003,
+            url="https://example.com/video",
+            preset="h:720",
+            title="Test",
+            platform="Test",
+        )
+        check(await q2.submit(j3) is True, "gonderim sirasinda yeni is acilmadi")
+        await q2.stop()
+        print("18) ayni link dedup OK")
+
         stats = await db.stats()
-        print("18) istatistikler:", stats)
+        print("19) istatistikler:", stats)
     except AssertionError as exc:
         print("HATA:", exc)
         return 1
