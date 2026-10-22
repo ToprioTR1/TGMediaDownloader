@@ -1,0 +1,5 @@
+aiogram>=3.15,<4
+yt-dlp>=2025.1.15
+gallery-dl>=1.27
+aiosqlite>=0.20
+python-dotenv>=1.0

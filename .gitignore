@@ -1,0 +1,13 @@
+.env
+data/
+.tmp/
+cookies.txt
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.db
+*.db-wal
+*.db-shm
+.idea/
+.vscode/

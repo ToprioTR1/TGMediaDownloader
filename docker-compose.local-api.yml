@@ -1,0 +1,21 @@
+services:
+  bot:
+    environment:
+      TELEGRAM_API_URL: http://bot-api:8081
+      MAX_UPLOAD_MB: 2000
+    depends_on:
+      - bot-api
+
+  # 50 MB ustu dosyalar icin yerel Telegram Bot API sunucusu.
+  # https://my.telegram.org adresinden api_id / api_hash alin, .env'e ekleyin.
+  bot-api:
+    image: aiogram/telegram-bot-api:latest
+    container_name: video-dl-bot-api
+    restart: unless-stopped
+    environment:
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH}
+      TELEGRAM_LOCAL: "1"
+      TELEGRAM_HTTP_PORT: "8081"
+    volumes:
+      - ./data/bot-api:/var/lib/telegram-bot-api

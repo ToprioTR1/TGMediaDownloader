@@ -1,0 +1,19 @@
+services:
+  bot:
+    build: .
+    container_name: video-dl-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DOWNLOAD_DIR: /data/downloads
+      DB_PATH: /data/bot.db
+      COOKIES_FILE: /data/cookies.txt
+      TZ: Europe/Istanbul
+    volumes:
+      - ./data:/data
+    # 50 MB ustu dosyalar icin yerel Bot API sunucusu kullaniyorsaniz acin:
+    # extra_hosts:
+    #   - "host.docker.internal:host-gateway"
+    # environment:
+    #   TELEGRAM_API_URL: http://host.docker.internal:8081
