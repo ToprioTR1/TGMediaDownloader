@@ -314,7 +314,27 @@ class Database:
         await self.conn.commit()
         return cur.rowcount or 0
 
+    async def cache_clear(self) -> int:
+        cur = await self.conn.execute("DELETE FROM media_cache")
+        await self.conn.commit()
+        return cur.rowcount or 0
+
     async def cache_count(self) -> int:
         async with self.conn.execute("SELECT COUNT(*) FROM media_cache") as cur:
             row = await cur.fetchone()
         return int(row[0]) if row else 0
+
+    async def cache_stats(self) -> dict[str, Any]:
+        async with self.conn.execute(
+            "SELECT COUNT(*) AS c, COALESCE(SUM(filesize), 0) AS b, "
+            "MIN(created_at) AS oldest, MAX(created_at) AS newest FROM media_cache"
+        ) as cur:
+            row = await cur.fetchone()
+        if row is None:
+            return {"count": 0, "bytes": 0, "oldest": None, "newest": None}
+        return {
+            "count": int(row["c"] or 0),
+            "bytes": int(row["b"] or 0),
+            "oldest": row["oldest"],
+            "newest": row["newest"],
+        }

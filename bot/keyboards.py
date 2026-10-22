@@ -39,6 +39,9 @@ def admin_keyboard() -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(text="📊 İstatistik", callback_data="admin|stats"),
                 InlineKeyboardButton(text="👥 Kullanıcılar", callback_data="admin|users"),
-            ]
+            ],
+            [
+                InlineKeyboardButton(text="⚡️ Önbellek", callback_data="admin|cache"),
+            ],
         ]
     )

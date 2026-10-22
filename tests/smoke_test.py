@@ -738,8 +738,27 @@ async def main() -> int:
         doc_path.unlink(missing_ok=True)
         print("22) dosya olarak gonderim OK")
 
+        # 23) admin onbellek yonetimi
+        cache_stats = await db.cache_stats()
+        check(cache_stats["count"] > 0, "onbellek istatistikleri bos")
+        check(cache_stats["bytes"] > 0, "onbellek boyutu sifir")
+        mark = len(bot.calls)
+        await dp.feed_update(bot, msg_update("/cache", 40))
+        check(
+            any("Medya önbelleği" in t for t in bot.texts_since(mark)),
+            "/cache cevap vermedi",
+        )
+        mark = len(bot.calls)
+        await dp.feed_update(bot, msg_update("/cache temizle 3650", 41))
+        check(
+            any("0" in t and "silindi" in t for t in bot.texts_since(mark)),
+            "/cache temizle calismadi",
+        )
+        check((await db.cache_stats())["count"] == cache_stats["count"], "onbellek bozuldu")
+        print("23) onbellek yonetimi OK")
+
         stats = await db.stats()
-        print("23) istatistikler:", stats)
+        print("24) istatistikler:", stats)
     except AssertionError as exc:
         print("HATA:", exc)
         return 1
