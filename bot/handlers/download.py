@@ -35,6 +35,7 @@ from ..utils import (
     is_blocked_host,
     parse_quality,
     wants_audio,
+    wants_document,
 )
 
 log = logging.getLogger(__name__)
@@ -110,6 +111,7 @@ def _info_text(
     preset: str,
     downgraded: bool,
     settings: Settings,
+    as_document: bool = False,
 ) -> str:
     meta = [info.platform]
     if info.uploader:
@@ -135,6 +137,8 @@ def _info_text(
         lines.append(f"🎯 İstenen {requested}p → en yakın <b>{chosen}p</b> indirilecek…")
     else:
         lines.append(f"🎯 Varsayılan {target}p → <b>{chosen}p</b> indirilecek…")
+    if as_document:
+        lines.append("📄 Dosya olarak gönderilecek…")
     return "\n".join(lines)
 
 
@@ -232,6 +236,7 @@ async def on_text(
     user = await db.get_user(user_id) or {}
     requested, audio = _request_options(text, user)
     show_caption = bool(user.get("show_caption", 1))
+    as_document = wants_document(text)
 
     for url in urls:
         if is_blocked_host(url):
@@ -315,7 +320,14 @@ async def on_text(
         with suppress(TelegramBadRequest):
             await status.edit_text(
                 _info_text(
-                    info, requested, target, chosen, preset, downgraded, settings
+                    info,
+                    requested,
+                    target,
+                    chosen,
+                    preset,
+                    downgraded,
+                    settings,
+                    as_document,
                 ),
                 link_preview_options=LinkPreviewOptions(
                     url=info.webpage_url, prefer_small_media=True
@@ -334,6 +346,7 @@ async def on_text(
             duration=info.duration,
             source_url=info.webpage_url,
             show_caption=show_caption,
+            as_document=as_document,
         )
         try:
             queued = await queue.submit(job)

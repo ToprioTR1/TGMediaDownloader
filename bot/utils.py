@@ -12,6 +12,7 @@ URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 QUALITY_RE = re.compile(r"(?<![\d.])(\d{3,4})\s*[pP](?![a-zA-Z0-9])")
 K_QUALITY = {"8k": 4320, "4k": 2160, "2k": 1440}
 AUDIO_RE = re.compile(r"\b(mp3|m4a|ses|audio|müzik|muzik)\b", re.IGNORECASE)
+DOCUMENT_RE = re.compile(r"\b(dosya|belge|file)\b", re.IGNORECASE)
 
 PLATFORM_NAMES = {
     "youtube": "YouTube",
@@ -67,6 +68,11 @@ def parse_quality(text: str) -> int | None:
 def wants_audio(text: str) -> bool:
     """Kullanici ses indirmek istiyor mu ('mp3', 'ses' ...)."""
     return bool(AUDIO_RE.search(text or ""))
+
+
+def wants_document(text: str) -> bool:
+    """Kullanici medyayi dosya olarak istiyor mu ('dosya', 'file' ...)."""
+    return bool(DOCUMENT_RE.search(text or ""))
 
 
 def nearest_height(heights: list[int], target: int | None) -> int | None:

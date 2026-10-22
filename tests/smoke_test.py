@@ -60,7 +60,7 @@ from bot.handlers.download import (  # noqa: E402
 )
 from bot.middlewares import UserMiddleware  # noqa: E402
 from bot.queue import Job, JobQueue  # noqa: E402
-from bot.utils import nearest_height, parse_quality  # noqa: E402
+from bot.utils import nearest_height, parse_quality, wants_document  # noqa: E402
 
 URL = "https://www.tiktok.com/@tiktok/video/7106594312292453675"
 ADMIN = User(id=42, is_bot=False, first_name="Ali", username="alitoprak")
@@ -305,6 +305,8 @@ async def main() -> int:
         check(parse_quality("link") is None, "kalite olmadan deger dondu")
         check(nearest_height([1280, 720], 1080) == 1280, "en yakin kalite yanlis")
         check(nearest_height([1920, 1280, 1024], 1012) == 1024, "tiktok varsayilani yanlis")
+        check(wants_document("link dosya") and wants_document("link file"), "dosya ipucu okunamadi")
+        check(not wants_document("link 720p"), "dosya olmayan metin dosya sayildi")
         check(settings.default_height_for("Instagram") == 1280, "instagram varsayilani")
         check(settings.default_height_for("TikTok") == 1012, "tiktok varsayilani")
         check(settings.default_height_for("YouTube") == 720, "youtube varsayilani")
@@ -711,8 +713,33 @@ async def main() -> int:
         check(bool(user.get("show_caption", 1)), "caption acilmadi")
         print("21) /ayar OK")
 
+        # 22) "dosya" ipucu medyayi belge olarak gonderir
+        doc_path = root / "doc-test.bin"
+        doc_path.write_bytes(b"test")
+        doc_job = Job(
+            id="doc1",
+            user_id=ADMIN.id,
+            chat_id=ADMIN.id,
+            status_message_id=9020,
+            url="https://example.com/doc",
+            preset="h:720",
+            title="Dosya testi",
+            platform="Test",
+            as_document=True,
+        )
+        check(doc_job.cache_preset == "h:720|doc", "dosya onbellek anahtari yanlis")
+        mark = len(bot.calls)
+        _, media_type = await queue._send(doc_job, doc_path)
+        check(media_type == "document", "dosya olarak gonderilmedi")
+        check(
+            any(c[0] == "send_document" for c in bot.calls[mark:]),
+            "send_document cagrilmadi",
+        )
+        doc_path.unlink(missing_ok=True)
+        print("22) dosya olarak gonderim OK")
+
         stats = await db.stats()
-        print("22) istatistikler:", stats)
+        print("23) istatistikler:", stats)
     except AssertionError as exc:
         print("HATA:", exc)
         return 1

@@ -58,6 +58,12 @@ class Job:
     extra_targets: list[tuple[int, int]] = field(default_factory=list)
     sending: bool = False
     show_caption: bool = True
+    as_document: bool = False
+
+    @property
+    def cache_preset(self) -> str:
+        """Onbellek anahtarinda video ve dosya gonderimini ayirir."""
+        return f"{self.preset}|doc" if self.as_document else self.preset
 
 
 class QueueFullError(Exception):
@@ -147,6 +153,8 @@ class JobQueue:
             duration=job.duration,
             kind=job.kind,
             source_url=job.source_url,
+            show_caption=job.show_caption,
+            as_document=job.as_document,
         )
         try:
             await self.submit(new_job)
@@ -163,7 +171,7 @@ class JobQueue:
         acilmaz; yeni durum mesaji mevcut ise baglanir. Yeni is eklendiyse True,
         mevcut ise baglandiysa False doner.
         """
-        key = (job.user_id, job.url, job.preset)
+        key = (job.user_id, job.url, job.cache_preset)
         existing = self._jobs.get(key)
         if existing is not None and existing is not job and not existing.sending:
             existing.extra_targets.append((job.chat_id, job.status_message_id))
@@ -198,7 +206,7 @@ class JobQueue:
             except Exception:  # noqa: BLE001
                 log.exception("Isci %s beklenmeyen hata: %s", index, job.url)
             finally:
-                key = (job.user_id, job.url, job.preset)
+                key = (job.user_id, job.url, job.cache_preset)
                 if self._jobs.get(key) is job:
                     self._jobs.pop(key, None)
                 self._active -= 1
@@ -214,7 +222,7 @@ class JobQueue:
 
         if self._settings.cache_days:
             cached = await self._db.cache_get(
-                job.url, job.preset, self._settings.cache_days
+                job.url, job.cache_preset, self._settings.cache_days
             )
             if cached is not None:
                 job.sending = True
@@ -265,9 +273,9 @@ class JobQueue:
             if file_id and self._settings.cache_days:
                 try:
                     await self._db.cache_put(
-                        media_cache_key(job.url, job.preset),
+                        media_cache_key(job.url, job.cache_preset),
                         job.url,
-                        job.preset,
+                        job.cache_preset,
                         file_id,
                         media_type,
                         job.title[:200],
@@ -451,7 +459,7 @@ class JobQueue:
         keyboard = (
             media_keyboard(
                 job.source_url,
-                media_cache_key(job.url, job.preset),
+                media_cache_key(job.url, job.cache_preset),
                 allow_audio=not is_audio,
             )
             if self._settings.cache_days
@@ -481,6 +489,15 @@ class JobQueue:
     ) -> tuple[Message, str]:
         for attempt in range(2):
             try:
+                if job.as_document:
+                    msg = await self._bot.send_document(
+                        chat_id=chat_id,
+                        document=file,
+                        caption=caption,
+                        reply_markup=keyboard,
+                    )
+                    return msg, "document"
+
                 if is_audio:
                     msg: Message = await self._bot.send_audio(
                         chat_id=chat_id,
