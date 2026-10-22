@@ -85,6 +85,7 @@ async def run() -> None:
             [
                 BotCommand(command="start", description="Başla"),
                 BotCommand(command="help", description="Nasıl kullanılır?"),
+                BotCommand(command="ayar", description="Kişisel ayarlar"),
                 BotCommand(command="me", description="Kullanım bilgilerim"),
             ]
         )

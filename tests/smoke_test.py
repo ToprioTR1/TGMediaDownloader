@@ -55,6 +55,7 @@ from bot.handlers.download import (  # noqa: E402
     _gallery_url,
     _limit_error,
     _needs_gallery,
+    _request_options,
     _resolve_preset,
 )
 from bot.middlewares import UserMiddleware  # noqa: E402
@@ -681,8 +682,37 @@ async def main() -> int:
         fresh_file.unlink(missing_ok=True)
         print("20) gecici dosya temizligi OK")
 
+        # 21) kisisel ayarlar (/ayar)
+        mark = len(bot.calls)
+        await dp.feed_update(bot, msg_update("/ayar", 30))
+        check(
+            any("Kişisel ayarlar" in t for t in bot.texts_since(mark)),
+            "/ayar cevap vermedi",
+        )
+
+        await dp.feed_update(bot, msg_update("/ayar kalite 1080", 31))
+        await dp.feed_update(bot, msg_update("/ayar ses aç", 32))
+        await dp.feed_update(bot, msg_update("/ayar caption kapat", 33))
+        user = await db.get_user(ADMIN.id) or {}
+        check(int(user.get("default_quality") or 0) == 1080, "kalite ayari kaydedilmedi")
+        check(bool(user.get("audio_default")), "ses ayari kaydedilmedi")
+        check(not bool(user.get("show_caption", 1)), "caption ayari kaydedilmedi")
+        requested, audio = _request_options(URL, user)
+        check(requested == 1080 and audio, "ayarlar istek cozumlemesine uygulanmadi")
+        requested, audio = _request_options(f"{URL} 720p", user)
+        check(requested == 720 and not audio, "acik kalite kullanici ayarini ezmedi")
+
+        await dp.feed_update(bot, msg_update("/ayar kalite 0", 34))
+        await dp.feed_update(bot, msg_update("/ayar ses kapat", 35))
+        await dp.feed_update(bot, msg_update("/ayar caption aç", 36))
+        user = await db.get_user(ADMIN.id) or {}
+        check(int(user.get("default_quality") or 0) == 0, "kalite sifirlanmadi")
+        check(not bool(user.get("audio_default")), "ses kapatilmadi")
+        check(bool(user.get("show_caption", 1)), "caption acilmadi")
+        print("21) /ayar OK")
+
         stats = await db.stats()
-        print("21) istatistikler:", stats)
+        print("22) istatistikler:", stats)
     except AssertionError as exc:
         print("HATA:", exc)
         return 1

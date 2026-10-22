@@ -17,9 +17,12 @@ CREATE TABLE IF NOT EXISTS users (
     first_name  TEXT,
     first_seen  TEXT NOT NULL DEFAULT (datetime('now')),
     last_seen   TEXT NOT NULL DEFAULT (datetime('now')),
-    downloads   INTEGER NOT NULL DEFAULT 0,
-    bytes_sent  INTEGER NOT NULL DEFAULT 0,
-    is_promoted INTEGER NOT NULL DEFAULT 0
+    downloads       INTEGER NOT NULL DEFAULT 0,
+    bytes_sent      INTEGER NOT NULL DEFAULT 0,
+    is_promoted     INTEGER NOT NULL DEFAULT 0,
+    default_quality INTEGER NOT NULL DEFAULT 0,
+    audio_default   INTEGER NOT NULL DEFAULT 0,
+    show_caption    INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS downloads (
@@ -80,11 +83,19 @@ class Database:
         """Eski veritabanlarina yeni kolonlari ekler."""
         async with self.conn.execute("PRAGMA table_info(users)") as cur:
             columns = {row["name"] for row in await cur.fetchall()}
-        if "is_promoted" not in columns:
-            await self.conn.execute(
-                "ALTER TABLE users ADD COLUMN is_promoted INTEGER NOT NULL DEFAULT 0"
-            )
-            log.info("users.is_promoted kolonu eklendi")
+
+        new_columns = {
+            "is_promoted": "INTEGER NOT NULL DEFAULT 0",
+            "default_quality": "INTEGER NOT NULL DEFAULT 0",
+            "audio_default": "INTEGER NOT NULL DEFAULT 0",
+            "show_caption": "INTEGER NOT NULL DEFAULT 1",
+        }
+        for name, definition in new_columns.items():
+            if name not in columns:
+                await self.conn.execute(
+                    f"ALTER TABLE users ADD COLUMN {name} {definition}"
+                )
+                log.info("users.%s kolonu eklendi", name)
 
     async def close(self) -> None:
         if self._conn is not None:
@@ -150,6 +161,35 @@ class Database:
         ) as cur:
             row = await cur.fetchone()
         return bool(row["is_promoted"]) if row else False
+
+    async def update_user_settings(
+        self,
+        user_id: int,
+        *,
+        default_quality: int | None = None,
+        audio_default: bool | None = None,
+        show_caption: bool | None = None,
+    ) -> bool:
+        fields: list[str] = []
+        params: list[Any] = []
+        if default_quality is not None:
+            fields.append("default_quality = ?")
+            params.append(default_quality)
+        if audio_default is not None:
+            fields.append("audio_default = ?")
+            params.append(1 if audio_default else 0)
+        if show_caption is not None:
+            fields.append("show_caption = ?")
+            params.append(1 if show_caption else 0)
+        if not fields:
+            return False
+
+        params.append(user_id)
+        cur = await self.conn.execute(
+            f"UPDATE users SET {', '.join(fields)} WHERE id = ?", params
+        )
+        await self.conn.commit()
+        return cur.rowcount > 0
 
     # ---------------------------------------------------------------- indirmeler
 

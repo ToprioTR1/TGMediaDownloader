@@ -168,6 +168,19 @@ async def _probe_gallery(
     return items or None
 
 
+def _request_options(text: str, user: dict) -> tuple[int | None, bool]:
+    """Link metni ve kullanici ayarlarindan kalite/ses tercihini cozer.
+
+    Acikca yazilan kalite her zaman kullanici varsayilanindan onceliklidir.
+    """
+    requested = parse_quality(text)
+    audio = wants_audio(text)
+    if requested is None and not audio:
+        requested = int(user.get("default_quality") or 0) or None
+        audio = bool(user.get("audio_default"))
+    return requested, audio
+
+
 def _message_text(message: Message) -> str:
     """Kendi metni/caption'i bos ise yanitlanan mesajinkini de kullanir."""
     text = message.text or message.caption or ""
@@ -216,8 +229,9 @@ async def on_text(
 
     _last_request[user_id] = now
 
-    requested = parse_quality(text)
-    audio = wants_audio(text)
+    user = await db.get_user(user_id) or {}
+    requested, audio = _request_options(text, user)
+    show_caption = bool(user.get("show_caption", 1))
 
     for url in urls:
         if is_blocked_host(url):
@@ -273,6 +287,7 @@ async def on_text(
                 platform="Instagram",
                 kind="gallery",
                 source_url=url,
+                show_caption=show_caption,
             )
             try:
                 queued = await queue.submit(job)
@@ -318,6 +333,7 @@ async def on_text(
             platform=info.platform,
             duration=info.duration,
             source_url=info.webpage_url,
+            show_caption=show_caption,
         )
         try:
             queued = await queue.submit(job)
@@ -431,6 +447,7 @@ async def on_action(
         status = await callback.bot.send_message(
             callback.message.chat.id, "🎵 <b>Ses hazırlanıyor…</b>"
         )
+        user = await db.get_user(callback.from_user.id) or {}
         job = Job(
             id=uuid.uuid4().hex[:10],
             user_id=callback.from_user.id,
@@ -441,6 +458,7 @@ async def on_action(
             title=row.get("title") or "Ses",
             platform=row.get("platform") or "Medya",
             source_url=row.get("url"),
+            show_caption=bool(user.get("show_caption", 1)),
         )
         try:
             queued = await queue.submit(job)

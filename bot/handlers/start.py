@@ -47,7 +47,7 @@ async def cmd_start(message: Message, db_user: dict) -> None:
         "Gönderinin açıklamasındaki linki yanıtlayıp sadece <code>720p</code> "
         "yazman da yeterli.\n"
         "Örnek: <code>https://youtu.be/... 720p</code>\n\n"
-        "Komutlar: /help · /me",
+        "Komutlar: /help · /ayar · /me",
         reply_markup=_home_keyboard(),
         disable_web_page_preview=True,
     )
@@ -87,6 +87,9 @@ def _help_text(settings: Settings) -> str:
         "Ses için <code>mp3</code> veya <code>ses</code> yazın.\n"
         f"Seçilen kalite {settings.max_upload_mb} MB limitini aşacaksa bot "
         "otomatik olarak bir alt kaliteye iner.\n\n"
+        "<b>⚙️ Kişisel ayarlar</b>\n"
+        "<code>/ayar</code> ile varsayılan kaliteyi, ses tercihini ve caption "
+        "gösterimini değiştirebilirsiniz.\n\n"
         "<b>🖼 Instagram fotoğraf / carousel</b>\n"
         "Video içermeyen Instagram gönderileri de indirilir; fotoğraflar albüm "
         f"olarak gönderilir (en fazla {settings.gallery_limit} medya).\n\n"
@@ -108,12 +111,96 @@ def _help_text(settings: Settings) -> str:
         "• Bir mesajda en fazla 3 bağlantı gönderebilirsiniz.\n"
         "• Özel (private) Instagram gönderileri için botun çerezleri olması gerekir.\n"
         "• Uzun videoları indirmek biraz zaman alabilir.\n\n"
-        "Komutlar: /start · /help · /me"
+        "Komutlar: /start · /help · /ayar · /me"
     )
 
 
 def _promoted_line(promoted: bool) -> str:
     return "\n⭐ Sınırsız indirme hakkı: aktif" if promoted else ""
+
+
+_TRUE_WORDS = {"ac", "aç", "acik", "açık", "on", "1", "evet", "true"}
+_FALSE_WORDS = {"kapat", "kapali", "kapalı", "off", "0", "hayir", "hayır", "false"}
+
+
+def _parse_bool(value: str) -> bool | None:
+    if value in _TRUE_WORDS:
+        return True
+    if value in _FALSE_WORDS:
+        return False
+    return None
+
+
+def _settings_text(user: dict) -> str:
+    quality = int(user.get("default_quality") or 0)
+    audio = bool(user.get("audio_default"))
+    caption = bool(user.get("show_caption", 1))
+    return (
+        "<b>⚙️ Kişisel ayarlar</b>\n"
+        f"🎯 Varsayılan kalite: <b>{f'{quality}p' if quality else 'platform varsayılanı'}</b>\n"
+        f"🎵 Varsayılan ses: <b>{'açık' if audio else 'kapalı'}</b>\n"
+        f"📝 Caption: <b>{'açık' if caption else 'kapalı'}</b>\n\n"
+        "<b>Değiştirmek için</b>\n"
+        "<code>/ayar kalite 1080</code> · sıfırlamak için <code>/ayar kalite 0</code>\n"
+        "<code>/ayar ses aç</code> / <code>/ayar ses kapat</code>\n"
+        "<code>/ayar caption aç</code> / <code>/ayar caption kapat</code>\n\n"
+        "Varsayılan ses açıkken linkler MP3 olarak iner. Video istemek için "
+        "linkin sonuna <code>720p</code> gibi bir kalite yazın."
+    )
+
+
+@router.message(Command("ayar", "settings"))
+async def cmd_settings(message: Message, db: Database, db_user: dict) -> None:
+    user = await db.get_user(message.from_user.id) or db_user
+    parts = (message.text or "").split(maxsplit=2)
+    if len(parts) < 3:
+        await message.answer(_settings_text(user), disable_web_page_preview=True)
+        return
+
+    key = parts[1].lower()
+    value = parts[2].strip().lower()
+
+    if key in {"kalite", "quality"}:
+        raw = value.removesuffix("p")
+        try:
+            quality = int(raw)
+        except ValueError:
+            await message.answer("❌ Kalite sayı olmalı. Örnek: <code>/ayar kalite 1080</code>")
+            return
+        if quality != 0 and not 144 <= quality <= 4320:
+            await message.answer("❌ Kalite 144–4320 arasında olmalı (0 = sıfırla).")
+            return
+        await db.update_user_settings(message.from_user.id, default_quality=quality)
+        label = f"{quality}p" if quality else "platform varsayılanı"
+        await message.answer(f"✅ Varsayılan kalite: <b>{label}</b>")
+        return
+
+    if key in {"ses", "audio"}:
+        enabled = _parse_bool(value)
+        if enabled is None:
+            await message.answer("❌ Kullanım: <code>/ayar ses aç</code> veya <code>/ayar ses kapat</code>")
+            return
+        await db.update_user_settings(message.from_user.id, audio_default=enabled)
+        await message.answer(
+            f"✅ Varsayılan ses: <b>{'açık' if enabled else 'kapalı'}</b>"
+        )
+        return
+
+    if key in {"caption", "açıklama", "aciklama"}:
+        enabled = _parse_bool(value)
+        if enabled is None:
+            await message.answer(
+                "❌ Kullanım: <code>/ayar caption aç</code> veya <code>/ayar caption kapat</code>"
+            )
+            return
+        await db.update_user_settings(message.from_user.id, show_caption=enabled)
+        await message.answer(f"✅ Caption: <b>{'açık' if enabled else 'kapalı'}</b>")
+        return
+
+    await message.answer(
+        "❌ Bilinmeyen ayar. Kullanım: <code>/ayar kalite 1080</code>, "
+        "<code>/ayar ses aç</code>, <code>/ayar caption kapat</code>"
+    )
 
 
 @router.message(Command("me", "profil", "limit"))

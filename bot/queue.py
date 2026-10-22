@@ -57,6 +57,7 @@ class Job:
     enqueued_at: float = field(default_factory=time.time)
     extra_targets: list[tuple[int, int]] = field(default_factory=list)
     sending: bool = False
+    show_caption: bool = True
 
 
 class QueueFullError(Exception):
@@ -355,12 +356,14 @@ class JobQueue:
             self._tmpdirs.discard(tmpdir)
 
     async def _send_gallery(self, job: Job, files: list[Path]) -> None:
-        caption = (
-            f"<b>{escape(job.title[:150])}</b>\n{job.platform} • {len(files)} medya"
-        )
-        if len(files) > 1 and job.source_url:
-            # Albumlerde buton desteklenmiyor; kaynak linkini aciklamaya koy.
-            caption += f'\n<a href="{escape(job.source_url)}">🔗 Kaynak</a>'
+        caption: str | None = None
+        if job.show_caption:
+            caption = (
+                f"<b>{escape(job.title[:150])}</b>\n{job.platform} • {len(files)} medya"
+            )
+            if len(files) > 1 and job.source_url:
+                # Albumlerde buton desteklenmiyor; kaynak linkini aciklamaya koy.
+                caption += f'\n<a href="{escape(job.source_url)}">🔗 Kaynak</a>'
         keyboard = gallery_keyboard(job.source_url)
 
         if len(files) == 1:
@@ -472,7 +475,7 @@ class JobQueue:
         job: Job,
         file: FSInputFile,
         chat_id: int,
-        caption: str,
+        caption: str | None,
         keyboard: Any,
         is_audio: bool,
     ) -> tuple[Message, str]:
@@ -520,7 +523,9 @@ class JobQueue:
                 return msg, "document"
         raise RuntimeError("Medya gönderilemedi.")
 
-    def _caption(self, job: Job, size: int) -> str:
+    def _caption(self, job: Job, size: int) -> str | None:
+        if not job.show_caption:
+            return None
         title = escape(job.title[:200])
         return (
             f"<b>{title}</b>\n"
