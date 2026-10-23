@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any
@@ -69,6 +70,9 @@ class Database:
     def __init__(self, path: Path) -> None:
         self._path = Path(path)
         self._conn: aiosqlite.Connection | None = None
+        # Tek baglantida birden fazla yazma islemi ic ice girmesin. Aksi halde
+        # bir coroutine'in commit'i digerinin yarim kalan islemini de commit eder.
+        self._write_lock = asyncio.Lock()
 
     # ---------------------------------------------------------------- baglanti
 
@@ -118,18 +122,19 @@ class Database:
     async def touch_user(
         self, user_id: int, username: str | None, first_name: str | None
     ) -> dict[str, Any]:
-        await self.conn.execute(
-            """
-            INSERT INTO users(id, username, first_name)
-            VALUES(?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                username   = excluded.username,
-                first_name = excluded.first_name,
-                last_seen  = datetime('now')
-            """,
-            (user_id, username, first_name),
-        )
-        await self.conn.commit()
+        async with self._write_lock:
+            await self.conn.execute(
+                """
+                INSERT INTO users(id, username, first_name)
+                VALUES(?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    username   = excluded.username,
+                    first_name = excluded.first_name,
+                    last_seen  = datetime('now')
+                """,
+                (user_id, username, first_name),
+            )
+            await self.conn.commit()
         return await self.get_user(user_id) or {"id": user_id}
 
     async def get_user(self, user_id: int) -> dict[str, Any] | None:
@@ -162,22 +167,24 @@ class Database:
     async def touch_chat(
         self, chat_id: int, title: str | None, chat_type: str
     ) -> None:
-        await self.conn.execute(
-            """
-            INSERT INTO chats(id, title, chat_type)
-            VALUES(?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                title     = excluded.title,
-                chat_type = excluded.chat_type,
-                last_seen = datetime('now')
-            """,
-            (chat_id, title, chat_type),
-        )
-        await self.conn.commit()
+        async with self._write_lock:
+            await self.conn.execute(
+                """
+                INSERT INTO chats(id, title, chat_type)
+                VALUES(?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    title     = excluded.title,
+                    chat_type = excluded.chat_type,
+                    last_seen = datetime('now')
+                """,
+                (chat_id, title, chat_type),
+            )
+            await self.conn.commit()
 
     async def remove_chat(self, chat_id: int) -> None:
-        await self.conn.execute("DELETE FROM chats WHERE id = ?", (chat_id,))
-        await self.conn.commit()
+        async with self._write_lock:
+            await self.conn.execute("DELETE FROM chats WHERE id = ?", (chat_id,))
+            await self.conn.commit()
 
     async def recent_users(self, limit: int = 10) -> list[dict[str, Any]]:
         async with self.conn.execute(
@@ -187,11 +194,12 @@ class Database:
         return [dict(row) for row in rows]
 
     async def set_promoted(self, user_id: int, promoted: bool) -> bool:
-        cur = await self.conn.execute(
-            "UPDATE users SET is_promoted = ? WHERE id = ?",
-            (1 if promoted else 0, user_id),
-        )
-        await self.conn.commit()
+        async with self._write_lock:
+            cur = await self.conn.execute(
+                "UPDATE users SET is_promoted = ? WHERE id = ?",
+                (1 if promoted else 0, user_id),
+            )
+            await self.conn.commit()
         return cur.rowcount > 0
 
     async def is_promoted(self, user_id: int) -> bool:
@@ -224,10 +232,11 @@ class Database:
             return False
 
         params.append(user_id)
-        cur = await self.conn.execute(
-            f"UPDATE users SET {', '.join(fields)} WHERE id = ?", params
-        )
-        await self.conn.commit()
+        async with self._write_lock:
+            cur = await self.conn.execute(
+                f"UPDATE users SET {', '.join(fields)} WHERE id = ?", params
+            )
+            await self.conn.commit()
         return cur.rowcount > 0
 
     # ---------------------------------------------------------------- indirmeler
@@ -241,18 +250,19 @@ class Database:
         status: str,
         filesize: int = 0,
     ) -> None:
-        await self.conn.execute(
-            "INSERT INTO downloads(user_id, url, platform, preset, status, filesize) "
-            "VALUES(?, ?, ?, ?, ?, ?)",
-            (user_id, url, platform, preset, status, filesize),
-        )
-        if status == "ok":
+        async with self._write_lock:
             await self.conn.execute(
-                "UPDATE users SET downloads = downloads + 1, bytes_sent = bytes_sent + ? "
-                "WHERE id = ?",
-                (filesize, user_id),
+                "INSERT INTO downloads(user_id, url, platform, preset, status, filesize) "
+                "VALUES(?, ?, ?, ?, ?, ?)",
+                (user_id, url, platform, preset, status, filesize),
             )
-        await self.conn.commit()
+            if status == "ok":
+                await self.conn.execute(
+                    "UPDATE users SET downloads = downloads + 1, "
+                    "bytes_sent = bytes_sent + ? WHERE id = ?",
+                    (filesize, user_id),
+                )
+            await self.conn.commit()
 
     async def count_downloads_today(self, user_id: int) -> int:
         # created_at UTC'dir. Yerel gun baslangicini UTC'ye cevirerek karsilastir;
@@ -333,38 +343,44 @@ class Database:
         platform: str | None,
         filesize: int,
     ) -> None:
-        await self.conn.execute(
-            """
-            INSERT INTO media_cache
-                (cache_key, url, preset, file_id, media_type, title, platform, filesize)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(cache_key) DO UPDATE SET
-                file_id    = excluded.file_id,
-                title      = excluded.title,
-                platform   = excluded.platform,
-                filesize   = excluded.filesize,
-                created_at = datetime('now')
-            """,
-            (cache_key, url, preset, file_id, media_type, title, platform, filesize),
-        )
-        await self.conn.commit()
+        async with self._write_lock:
+            await self.conn.execute(
+                """
+                INSERT INTO media_cache
+                    (cache_key, url, preset, file_id, media_type, title, platform, filesize)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(cache_key) DO UPDATE SET
+                    file_id    = excluded.file_id,
+                    title      = excluded.title,
+                    platform   = excluded.platform,
+                    filesize   = excluded.filesize,
+                    created_at = datetime('now')
+                """,
+                (cache_key, url, preset, file_id, media_type, title, platform, filesize),
+            )
+            await self.conn.commit()
 
     async def cache_delete(self, cache_key: str) -> None:
-        await self.conn.execute("DELETE FROM media_cache WHERE cache_key = ?", (cache_key,))
-        await self.conn.commit()
+        async with self._write_lock:
+            await self.conn.execute(
+                "DELETE FROM media_cache WHERE cache_key = ?", (cache_key,)
+            )
+            await self.conn.commit()
 
     async def cache_cleanup(self, days: int = 45) -> int:
         days = max(0, int(days))
-        cur = await self.conn.execute(
-            "DELETE FROM media_cache WHERE created_at < datetime('now', ?)",
-            (f"-{days} day",),
-        )
-        await self.conn.commit()
+        async with self._write_lock:
+            cur = await self.conn.execute(
+                "DELETE FROM media_cache WHERE created_at < datetime('now', ?)",
+                (f"-{days} day",),
+            )
+            await self.conn.commit()
         return cur.rowcount or 0
 
     async def cache_clear(self) -> int:
-        cur = await self.conn.execute("DELETE FROM media_cache")
-        await self.conn.commit()
+        async with self._write_lock:
+            cur = await self.conn.execute("DELETE FROM media_cache")
+            await self.conn.commit()
         return cur.rowcount or 0
 
     async def cache_count(self) -> int:

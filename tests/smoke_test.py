@@ -618,7 +618,33 @@ async def main() -> int:
         finally:
             await db.conn.execute("DELETE FROM downloads WHERE user_id = 99")
             await db.conn.commit()
-        print("11) DB kaydi + gunluk sinir OK")
+
+        # Ayni baglantida eszamanli yazmalar birbirinin commit'ini bozmamali.
+        await db.touch_user(98, "concurrent", "Concurrent")
+        try:
+            await asyncio.gather(
+                *(
+                    db.record_download(
+                        98,
+                        f"https://example.com/concurrent/{index}",
+                        "Test",
+                        "h:720",
+                        "ok",
+                        index,
+                    )
+                    for index in range(10)
+                )
+            )
+            concurrent_user = await db.get_user(98)
+            check(
+                concurrent_user is not None and concurrent_user["downloads"] == 10,
+                f"eszamanli DB yazmalari kayboldu: {concurrent_user}",
+            )
+        finally:
+            await db.conn.execute("DELETE FROM downloads WHERE user_id = 98")
+            await db.conn.execute("DELETE FROM users WHERE id = 98")
+            await db.conn.commit()
+        print("11) DB kaydi + gunluk sinir + eszamanli yazma OK")
 
         # 12) /stats
         mark = len(bot.calls)
