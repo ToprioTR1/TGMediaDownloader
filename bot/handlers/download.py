@@ -33,6 +33,7 @@ from ..gallery import GalleryDownloader
 from ..keyboards import media_keyboard
 from ..queue import Job, JobQueue, QueueFullError
 from ..utils import (
+    UNSUPPORTED_URL_TEXT,
     escape,
     extract_urls,
     human_duration,
@@ -63,6 +64,17 @@ def _gallery_url(url: str) -> bool:
     except ValueError:
         return False
     return any(host == domain or host.endswith(f".{domain}") for domain in GALLERY_HOSTS)
+
+
+def _supports_url(
+    downloader: Downloader, gallery: GalleryDownloader, url: str
+) -> bool:
+    """URL'yi yt-dlp site eşleştiricisi veya Instagram galerisi destekliyor mu?"""
+    if downloader.supports_url(url):
+        return True
+    return bool(
+        _gallery_url(url) and gallery is not None and gallery.available
+    )
 
 
 def _needs_gallery(info: MediaInfo) -> bool:
@@ -242,7 +254,8 @@ async def on_text(
     if (message.text or "").startswith("/"):
         return
 
-    if not extract_urls(text):
+    urls = extract_urls(text)
+    if not urls:
         return
 
     user_id = message.from_user.id
@@ -290,6 +303,23 @@ async def _process_text(
     only_url: str | None = None,
     existing_status: Message | None = None,
 ) -> None:
+    urls = [only_url] if only_url else extract_urls(text)
+    supported_urls = [url for url in urls if _supports_url(downloader, gallery, url)]
+    unsupported = [url for url in urls if url not in supported_urls]
+    if unsupported:
+        if existing_status is not None and not supported_urls:
+            await queue.edit_status(
+                chat_id,
+                existing_status.message_id,
+                f"❌ {UNSUPPORTED_URL_TEXT}",
+                wait=True,
+            )
+            await queue.forget_status(chat_id, existing_status.message_id)
+        else:
+            await bot.send_message(chat_id, f"❌ {UNSUPPORTED_URL_TEXT}")
+    if not supported_urls:
+        return
+
     error = await _limit_error(user_id, db, settings, queue)
     if error:
         if existing_status is not None:
@@ -309,9 +339,8 @@ async def _process_text(
     show_caption = bool(user.get("show_caption", 1))
     as_document = wants_document(text)
 
-    urls = [only_url] if only_url else extract_urls(text)
     reuse_status = existing_status
-    for url in urls:
+    for url in supported_urls:
         if reuse_status is not None:
             status = reuse_status
             reuse_status = None

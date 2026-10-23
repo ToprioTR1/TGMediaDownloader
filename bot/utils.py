@@ -17,6 +17,10 @@ log = logging.getLogger(__name__)
 DNS_LOOKUP_TIMEOUT = 3.0
 BLOCKED_HOST_SUFFIXES = (".local", ".internal", ".localhost")
 URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
+UNSUPPORTED_URL_TEXT = (
+    "Bu bağlantı desteklenmiyor. Bot yalnızca yt-dlp'nin tanıdığı "
+    "sitelerden indirme yapar. Desteklenen platformlar için /help yazın."
+)
 QUALITY_RE = re.compile(r"(?<![\d.])(\d{3,4})(?:\s*[pP])?(?![\d.])")
 K_QUALITY = {"8k": 4320, "4k": 2160, "2k": 1440}
 AUDIO_RE = re.compile(r"\b(mp3|m4a|ses|audio|müzik|muzik)\b", re.IGNORECASE)

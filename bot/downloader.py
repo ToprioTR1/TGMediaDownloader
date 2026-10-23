@@ -10,14 +10,17 @@ import logging
 import os
 import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import yt_dlp
+from yt_dlp.extractor import gen_extractors
 
 from . import netguard
 from .config import Settings
-from .utils import platform_name
+from .utils import UNSUPPORTED_URL_TEXT, platform_name
 
 log = logging.getLogger(__name__)
 
@@ -55,7 +58,7 @@ def _friendly_error(raw: str) -> str:
             "genelde hesap çerezi (cookies.txt) gerekir. Bot sahibine bildirin."
         )
     if "unsupported url" in text:
-        return "Bu bağlantı desteklenmiyor. Desteklenen siteleri /help ile görebilirsiniz."
+        return UNSUPPORTED_URL_TEXT
     if any(k in text for k in ("video unavailable", "not available", "removed", "deleted")):
         return "Video bulunamadı veya kaldırılmış olabilir."
     if "http error 429" in text or "too many requests" in text:
@@ -75,9 +78,80 @@ def _friendly_error(raw: str) -> str:
     return "Video indirilemedi. Bağlantıyı kontrol edip tekrar deneyin."
 
 
+# yt-dlp bu kısa linkleri doğrudan eşleştirmez; resmi kısa alan adı
+# yönlendirme sonrası desteklenen siteye gider. Yalnızca sitelerin kendi
+# kısa link alan adlarını kabul ediyoruz, rastgele kısaltıcıları değil.
+_KNOWN_SHORT_HOSTS = frozenset(
+    {
+        "instagr.am",
+        "pin.it",
+        "fb.watch",
+        "redd.it",
+        "b23.tv",
+    }
+)
+
+
+def _is_known_short_url(url: str) -> bool:
+    try:
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").lower().rstrip(".")
+    except ValueError:
+        return False
+    if parsed.scheme.lower() not in {"http", "https"}:
+        return False
+    if host.startswith("www."):
+        host = host[4:]
+    return host in _KNOWN_SHORT_HOSTS
+
+
+@lru_cache(maxsize=1)
+def _supported_extractors() -> tuple[Any, ...]:
+    """GenericIE hariç yt-dlp site eşleştiricilerini bir kez hazırlar.
+
+    GenericIE neredeyse her URL'yi kabul ettiği için onu dışarıda bırakıyoruz;
+    aksi halde rastgele bir web sayfası da "desteklenen" sayılırdı.
+    """
+    extractors: list[Any] = []
+    try:
+        for ie in gen_extractors():
+            try:
+                key = ie.ie_key()
+            except Exception:  # noqa: BLE001 - bozuk extractor'ı atla
+                continue
+            if str(key).lower() != "generic":
+                extractors.append(ie)
+    except Exception:  # noqa: BLE001 - liste yüklenemezse güvenli tarafta kal
+        log.exception("yt-dlp extractor listesi yüklenemedi")
+        return ()
+    return tuple(extractors)
+
+
+def ytdlp_supports_url(url: str) -> bool:
+    """URL'yi yt-dlp'nin site extractor'larından biri tanıyor mu?
+
+    Bu kontrol ağ isteği yapmaz. Yalnızca GenericIE'ye uyan normal web
+    sayfaları desteklenmiyor sayılır; böylece bot rastgele URL'leri probe
+    etmeye çalışmaz. Resmi kısa link alan adları da kabul edilir.
+    """
+    if not url:
+        return False
+    if _is_known_short_url(url):
+        return True
+    for ie in _supported_extractors():
+        try:
+            if ie.suitable(url):
+                return True
+        except Exception:  # noqa: BLE001 - bozuk bir extractor diğerlerini engellemesin
+            continue
+    return False
+
+
 class Downloader:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
+        # İlk mesajda event loop'u bekletmemek için listeyi önceden yükle.
+        _supported_extractors()
         # İndirme ağını süreç genelinde denetle. Ana giriş noktası da kurar;
         # buradaki çağrı kütüphaneyi doğrudan kullanan yolları da kapsar.
         netguard.ensure_for_settings(settings)
@@ -120,6 +194,10 @@ class Downloader:
         return opts
 
     # ------------------------------------------------------------------ kesif
+
+    def supports_url(self, url: str) -> bool:
+        """Ağ isteği yapmadan yt-dlp site desteğini kontrol eder."""
+        return ytdlp_supports_url(url)
 
     def probe(self, url: str) -> MediaInfo:
         opts = self._base_opts()

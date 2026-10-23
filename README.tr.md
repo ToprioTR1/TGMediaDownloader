@@ -22,6 +22,9 @@ ile yazıldı, Docker ile çalışacak şekilde hazırlandı.
 - ⚙️ `/ayar` ile kişisel varsayılanlar: kalite, ses tercihi, caption
 - 🔘 Videoların altında `🔗 Kaynak` · `🎵 Ses olarak al` butonları
 - 📝 Medya açıklamasındaki (caption) ve yanıtlanan mesajdaki bağlantılar da işlenir
+- 🚦 Yalnızca yt-dlp site eşleştiricisinin tanıdığı URL'ler (veya sitelerin
+  resmi kısa link alan adları) işlenir; normal web sayfaları ağ isteği
+  yapılmadan reddedilir
 - 🖼 Instagram fotoğraf / carousel gönderileri (gallery-dl ile, albüm olarak;
   `dosya` yazılırsa belge olarak)
 - 🚫 Her Python TCP `connect` anında SSRF koruması: yönlendirmeler, DNS
@@ -408,12 +411,14 @@ $env:PYTHONPATH="." ; python tests/smoke_test.py    # PowerShell
 PYTHONPATH=. python tests/smoke_test.py             # bash
 
 python -m unittest tests.test_netguard -v           # SSRF/connect regresyon testleri
+python -m unittest tests.test_url_support -v        # yt-dlp URL eşleştirme testleri
 ```
 
 Duman testi kendi verisini `.tmp/` altında oluşturur ve Telegram'a gerçek istek
 atmaz. Netguard testleri yalnızca yerel soketler kullanır (loopback izin listesi,
 yönlendirme, DNS rebinding, fail-closed DNS ve gallery-dl alt süreç
-önyüklemesi).
+önyüklemesi). URL destek testleri yalnızca yerel yt-dlp extractor eşleştirmesi
+kullanır ve ağ isteği yapmaz.
 
 ## Sorun Giderme
 

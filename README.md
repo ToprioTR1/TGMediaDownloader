@@ -27,6 +27,9 @@ Built with Python 3.12 + [aiogram 3](https://github.com/aiogram/aiogram) +
 - ⚙️ Per-user defaults via `/ayar`: target quality, audio-only links, captions
 - 🔘 `🔗 Source` · `🎵 Get audio` buttons under videos
 - 📝 Links in media captions and in replied-to messages are processed too
+- 🚦 Only URLs matched by a yt-dlp site extractor (or a site's official
+  short-link host) are processed; generic web pages are rejected locally
+  without a network probe
 - 🖼 Instagram photo / carousel posts (via gallery-dl, sent as an album;
   `dosya` sends them as documents)
 - 🚫 SSRF protection on every Python TCP `connect`: redirects, DNS rebinding,
@@ -419,12 +422,14 @@ $env:PYTHONPATH="." ; python tests/smoke_test.py    # PowerShell
 PYTHONPATH=. python tests/smoke_test.py             # bash
 
 python -m unittest tests.test_netguard -v           # SSRF/connect regression tests
+python -m unittest tests.test_url_support -v        # yt-dlp URL matching tests
 ```
 
 The smoke test creates its own data under `.tmp/` and does not make real requests
 to Telegram. The netguard tests use only local sockets (loopback allowlist,
 redirect, DNS rebinding, fail-closed DNS, and the gallery-dl subprocess
-bootstrap).
+bootstrap). The URL support tests use only local yt-dlp extractor matching and
+make no network requests.
 
 ## Troubleshooting
 
