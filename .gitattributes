@@ -1,0 +1,2 @@
+# Shell betikleri Linux konteynerinde CALISACAK; CRLF shebang'i bozar.
+*.sh text eol=lf
