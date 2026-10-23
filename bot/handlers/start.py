@@ -50,7 +50,8 @@ def _home_keyboard() -> InlineKeyboardMarkup:
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, db_user: dict) -> None:
-    name = escape(db_user.get("first_name") or message.from_user.first_name or "arkadaş")
+    fallback_name = message.from_user.first_name if message.from_user else None
+    name = escape(db_user.get("first_name") or fallback_name or "arkadaş")
     await message.answer(
         f"👋 Merhaba <b>{name}</b>!\n\n"
         "Bana <b>Instagram</b>, <b>YouTube</b>, <b>TikTok</b>, <b>X</b> gibi "
@@ -103,7 +104,8 @@ def _help_text(settings: Settings) -> str:
         "Yazmazsanız varsayılan kalite kullanılır: "
         f"Instagram {settings.quality_instagram}p · "
         f"TikTok {settings.quality_tiktok}p · "
-        f"YouTube {settings.quality_youtube}p.\n"
+        f"YouTube {settings.quality_youtube}p · "
+        f"diğerleri {settings.quality_default}p.\n"
         "Ses için <code>mp3</code> veya <code>ses</code> yazın. "
         "Dosya olarak indirmek için <code>dosya</code>, <code>file</code> "
         "veya <code>fl</code> ekleyin.\n"

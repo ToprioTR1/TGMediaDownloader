@@ -257,6 +257,12 @@ async def on_text(
         return
 
     _last_request[user_id] = now
+    # Uzun calisan botlarda kullanici sozlugu sinirsiz buyumesin.
+    if len(_last_request) > 10000:
+        cutoff = now - max(settings.cooldown_sec, 60)
+        for tracked_id, timestamp in list(_last_request.items()):
+            if timestamp < cutoff:
+                _last_request.pop(tracked_id, None)
     await _process_text(
         message.bot,
         message.chat.id,
@@ -622,6 +628,10 @@ async def on_action(
         return
 
     if action == "again":
+        error = await _limit_error(callback.from_user.id, db, settings, queue)
+        if error:
+            await callback.answer(error, show_alert=True)
+            return
         try:
             await _resend_cached(
                 callback.bot,
@@ -644,6 +654,17 @@ async def on_action(
                 "Önbellek geçersizleşti, linki tekrar gönderin.", show_alert=True
             )
             return
+        try:
+            await db.record_download(
+                callback.from_user.id,
+                row["url"],
+                row.get("platform") or "",
+                row.get("preset") or "cache",
+                "ok",
+                int(row.get("filesize") or 0),
+            )
+        except Exception:  # noqa: BLE001 - medya zaten gonderildi
+            log.exception("Onbellek tekrar gonderimi kaydedilemedi")
         await callback.answer("Gönderildi 🔁")
         return
 
@@ -681,6 +702,7 @@ async def on_action(
                 f"❌ {escape(str(exc))}",
                 wait=True,
             )
+            await queue.forget_status(chat_id, status.message_id)
             await callback.answer(str(exc), show_alert=True)
             return
         if not queued:

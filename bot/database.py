@@ -84,6 +84,7 @@ class Database:
         self._conn.row_factory = aiosqlite.Row
         await self._conn.execute("PRAGMA journal_mode=WAL")
         await self._conn.execute("PRAGMA synchronous=NORMAL")
+        await self._conn.execute("PRAGMA busy_timeout=5000")
         await self._conn.executescript(SCHEMA)
         await self._migrate()
         await self._conn.commit()
@@ -305,6 +306,7 @@ class Database:
     async def cache_get(
         self, url: str, preset: str, days: int = 30
     ) -> dict[str, Any] | None:
+        days = max(0, int(days))
         async with self.conn.execute(
             "SELECT * FROM media_cache WHERE url = ? AND preset = ? "
             "AND created_at >= datetime('now', ?)",
@@ -352,6 +354,7 @@ class Database:
         await self.conn.commit()
 
     async def cache_cleanup(self, days: int = 45) -> int:
+        days = max(0, int(days))
         cur = await self.conn.execute(
             "DELETE FROM media_cache WHERE created_at < datetime('now', ?)",
             (f"-{days} day",),
