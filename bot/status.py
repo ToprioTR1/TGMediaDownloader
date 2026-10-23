@@ -270,6 +270,16 @@ class StatusHub:
                     log.debug("Durum mesaji silme ag hatasi: %s", exc)
                     return
 
+    async def forget(self, chat_id: int, message_id: int) -> None:
+        """Takip kartini birakir; mesaj silinmez.
+
+        Hata/uyari mesajlari kullanicida kalir. Kart yalnizca bellekten
+        cikarilir; kullanici yeniden dene dediginde yeni kart olusturulur.
+        """
+        card = self._cards.pop((chat_id, message_id), None)
+        if card is not None:
+            await card.stop()
+
     async def close(self) -> None:
         """Kapanista bekleyen butun durum gorevlerini durdurur."""
         self._closed = True

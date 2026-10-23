@@ -292,6 +292,7 @@ async def _process_text(
                 f"❌ {escape(error)}",
                 wait=True,
             )
+            await queue.forget_status(chat_id, existing_status.message_id)
         else:
             await bot.send_message(chat_id, error)
         return
@@ -323,6 +324,7 @@ async def _process_text(
                 "🚫 Bu bağlantı güvenlik nedeniyle işlenemiyor.",
                 wait=True,
             )
+            await queue.forget_status(chat_id, status.message_id)
             continue
 
         info: MediaInfo | None = None
@@ -340,6 +342,7 @@ async def _process_text(
                 keyboard=_remember_probe_failure(chat_id, user_id, text, url),
                 wait=True,
             )
+            await queue.forget_status(chat_id, status.message_id)
             continue
         except DownloadError as exc:
             if _gallery_url(url):
@@ -352,6 +355,7 @@ async def _process_text(
                     keyboard=_remember_probe_failure(chat_id, user_id, text, url),
                     wait=True,
                 )
+                await queue.forget_status(chat_id, status.message_id)
                 continue
         except Exception:  # noqa: BLE001
             log.exception("Probe hatasi: %s", url)
@@ -362,6 +366,7 @@ async def _process_text(
                 keyboard=_remember_probe_failure(chat_id, user_id, text, url),
                 wait=True,
             )
+            await queue.forget_status(chat_id, status.message_id)
             continue
 
         if info is not None and _needs_gallery(info):
@@ -374,6 +379,7 @@ async def _process_text(
                     keyboard=_remember_probe_failure(chat_id, user_id, text, url),
                     wait=True,
                 )
+                await queue.forget_status(chat_id, status.message_id)
                 continue
 
         # ---------------------------------------------------------- galeri
@@ -391,6 +397,7 @@ async def _process_text(
                 kind="gallery",
                 source_url=url,
                 show_caption=show_caption,
+                as_document=as_document,
                 status_header=(
                     f"🖼 <b>{len(gallery_items)} medya bulundu</b>\n{escape(title)}"
                 ),
@@ -404,6 +411,7 @@ async def _process_text(
                     f"❌ {escape(str(exc))}",
                     wait=True,
                 )
+                await queue.forget_status(chat_id, status.message_id)
                 continue
             if not queued:
                 # Ayni is zaten suruyor: fazladan durum mesaji birakma.
@@ -423,6 +431,7 @@ async def _process_text(
                 f"❌ {escape(str(exc))}",
                 wait=True,
             )
+            await queue.forget_status(chat_id, status.message_id)
             continue
 
         status_header = _info_text(
@@ -459,6 +468,7 @@ async def _process_text(
                 f"❌ {escape(str(exc))}",
                 wait=True,
             )
+            await queue.forget_status(chat_id, status.message_id)
             continue
         if not queued:
             # Ayni is zaten suruyor: fazladan durum mesaji birakma.

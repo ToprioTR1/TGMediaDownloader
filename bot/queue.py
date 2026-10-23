@@ -26,6 +26,7 @@ from aiogram.types import (
     FSInputFile,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    InputMediaDocument,
     InputMediaPhoto,
     InputMediaVideo,
     Message,
@@ -197,6 +198,10 @@ class JobQueue:
     async def delete_status(self, chat_id: int, message_id: int) -> None:
         await self._status.delete(chat_id, message_id)
 
+    async def forget_status(self, chat_id: int, message_id: int) -> None:
+        """Son hata/uyari mesajini bellekte tutmayi birakir."""
+        await self._status.forget(chat_id, message_id)
+
     async def retry(self, job_id: str, chat_id: int, message_id: int) -> bool:
         """Hata alan bir isi ayni mesaji duzenleyerek tekrar kuyruga alir."""
         job = self._retry_jobs.pop(job_id, None)
@@ -293,9 +298,7 @@ class JobQueue:
                 log.exception("Isci %s beklenmeyen hata: %s", index, job.url)
                 preset = "gallery" if job.kind == "gallery" else job.preset
                 with contextlib.suppress(Exception):
-                    await self._db.record_download(
-                        job.user_id, job.url, job.platform, preset, "error"
-                    )
+                    await self._record(job, "error", preset=preset)
                 with contextlib.suppress(Exception):
                     await self._fail(
                         job,
@@ -331,25 +334,18 @@ class JobQueue:
                         "Onbellek gonderim yaniti alinamadi (%s): %s", job.id, exc
                     )
                     size = int(cached["filesize"] or 0)
-                    await self._db.record_download(
-                        job.user_id,
-                        job.url,
-                        job.platform,
-                        job.preset,
-                        "unknown",
-                        size,
-                    )
+                    await self._record(job, "unknown", size)
                     await self._delivery_uncertain(job)
                     return
                 except TelegramBadRequest as exc:
                     log.info("Onbellek gecersiz, yeniden indirilecek (%s): %s", job.id, exc)
-                    await self._db.cache_delete(cached["cache_key"])
+                    try:
+                        await self._db.cache_delete(cached["cache_key"])
+                    except Exception:  # noqa: BLE001 - onbellek temizligi indirmeyi durdurmasin
+                        log.exception("Gecersiz onbellek kaydi silinemedi: %s", job.id)
                 else:
                     size = int(cached["filesize"] or 0)
-                    await self._db.record_download(
-                        job.user_id, job.url, job.platform, job.preset, "ok", size
-                    )
-                    await self._delete(job)
+                    await self._finish_success(job, size)
                     log.info("Onbellekten gonderildi: %s (%s)", job.url, human_size(size))
                     return
 
@@ -400,12 +396,9 @@ class JobQueue:
                 except Exception:  # noqa: BLE001 - onbellek hatasi gonderimi bozmasin
                     log.exception("Onbellek yazilamadi: %s", job.id)
 
-            await self._db.record_download(
-                job.user_id, job.url, job.platform, job.preset, "ok", size
-            )
             elapsed = time.time() - started
-            # Durum mesajini sil: sohbette sadece gonderilen medya kalsin.
-            await self._delete(job)
+            # Medya ulasti; kayit/silme hatasi basarili gonderimi hataya cevirmemeli.
+            await self._finish_success(job, size)
             log.info(
                 "Tamamlandi kullanici=%s platform=%s boyut=%s sure=%.1fs",
                 job.user_id,
@@ -416,9 +409,7 @@ class JobQueue:
         except DownloadError as exc:
             await self._stop_ticker(ticker)
             ticker = None
-            await self._db.record_download(
-                job.user_id, job.url, job.platform, job.preset, "error"
-            )
+            await self._record(job, "error")
             await self._fail(job, f"❌ {escape(str(exc))}")
         except TelegramNetworkError as exc:
             # Yukleme sirasinda zaman asimi: Telegram dosyayi almis olabilir.
@@ -426,9 +417,7 @@ class JobQueue:
             await self._stop_ticker(ticker)
             ticker = None
             log.warning("Medya gonderim yaniti alinamadi (%s): %s", job.id, exc)
-            await self._db.record_download(
-                job.user_id, job.url, job.platform, job.preset, "unknown", size
-            )
+            await self._record(job, "unknown", size)
             await self._delivery_uncertain(job)
         except TelegramForbiddenError:
             log.warning("Kullanici botu engellemis: %s", job.user_id)
@@ -438,9 +427,7 @@ class JobQueue:
             await self._stop_ticker(ticker)
             ticker = None
             log.exception("Islem hatasi: %s", job.url)
-            await self._db.record_download(
-                job.user_id, job.url, job.platform, job.preset, "error"
-            )
+            await self._record(job, "error")
             await self._fail(
                 job, "❌ Beklenmeyen bir hata oluştu. Lütfen tekrar deneyin."
             )
@@ -464,6 +451,7 @@ class JobQueue:
                 ),
                 wait=True,
             )
+            await self.forget_status(job.chat_id, job.status_message_id)
             return
 
         tmpdir = await self._mkdtemp(job)
@@ -481,29 +469,20 @@ class JobQueue:
                 job, "sending", f"📤 <b>Gönderiliyor…</b> ({human_size(total)})"
             )
             await self._send_gallery(job, files)
-            await self._db.record_download(
-                job.user_id, job.url, job.platform, "gallery", "ok", total
-            )
-            # Durum mesajini sil: sohbette sadece gonderilen medya kalsin.
-            await self._delete(job)
+            # Medya ulasti; kayit/silme hatasi basarili gonderimi hataya cevirmemeli.
+            await self._finish_success(job, total, preset="gallery")
         except (GalleryError, DownloadError) as exc:
-            await self._db.record_download(
-                job.user_id, job.url, job.platform, "gallery", "error"
-            )
+            await self._record(job, "error", preset="gallery")
             await self._fail(job, f"❌ {escape(str(exc))}")
         except TelegramNetworkError as exc:
             log.warning("Galeri gonderim yaniti alinamadi (%s): %s", job.id, exc)
-            await self._db.record_download(
-                job.user_id, job.url, job.platform, "gallery", "unknown", total
-            )
+            await self._record(job, "unknown", total, preset="gallery")
             await self._delivery_uncertain(job)
         except TelegramForbiddenError:
             log.warning("Kullanici botu engellemis: %s", job.user_id)
         except Exception:  # noqa: BLE001
             log.exception("Galeri hatasi: %s", job.url)
-            await self._db.record_download(
-                job.user_id, job.url, job.platform, "gallery", "error"
-            )
+            await self._record(job, "error", preset="gallery")
             await self._fail(job, "❌ Medya gönderilemedi. Lütfen tekrar deneyin.")
         finally:
             await asyncio.to_thread(shutil.rmtree, tmpdir, True)
@@ -519,6 +498,36 @@ class JobQueue:
                 # Albumlerde buton desteklenmiyor; kaynak linkini aciklamaya koy.
                 caption += f'\n<a href="{escape(job.source_url)}">🔗 Kaynak</a>'
         keyboard = gallery_keyboard(job.source_url)
+
+        if job.as_document:
+            if len(files) == 1:
+                path = files[0]
+                for chat_id, _ in self._targets(job):
+                    await self._bot.send_document(
+                        chat_id=chat_id,
+                        document=FSInputFile(path, filename=path.name),
+                        caption=caption,
+                        reply_markup=keyboard,
+                        request_timeout=self._settings.upload_timeout_sec,
+                    )
+                return
+
+            for chat_id, _ in self._targets(job):
+                documents: list[InputMediaDocument] = []
+                for index, path in enumerate(files[:10]):
+                    documents.append(
+                        InputMediaDocument(
+                            media=FSInputFile(path, filename=path.name),
+                            caption=caption if index == 0 else None,
+                            parse_mode=ParseMode.HTML,
+                        )
+                    )
+                await self._bot.send_media_group(
+                    chat_id=chat_id,
+                    media=documents,
+                    request_timeout=self._settings.upload_timeout_sec,
+                )
+            return
 
         if len(files) == 1:
             path = files[0]
@@ -804,6 +813,36 @@ class JobQueue:
         while len(self._retry_jobs) > 500:
             self._retry_jobs.pop(next(iter(self._retry_jobs)))
 
+    async def _record(
+        self, job: Job, status: str, filesize: int = 0, *, preset: str | None = None
+    ) -> None:
+        """Istatistigi yazar; DB hatasi medya/hatalari kullaniciya yansitmasin."""
+        try:
+            await self._db.record_download(
+                job.user_id,
+                job.url,
+                job.platform,
+                preset or job.preset,
+                status,
+                filesize,
+            )
+        except Exception:  # noqa: BLE001 - istatistik kaydi is akisini durdurmasin
+            log.exception("Indirme kaydi yazilamadi: %s", job.id)
+
+    async def _finish_success(
+        self, job: Job, filesize: int, *, preset: str | None = None
+    ) -> None:
+        """Basarili gonderimden sonra kaydi yazar ve durum mesajini siler.
+
+        Bu noktada medya kullaniciya ulasmistir. DB veya mesaj silme hatasi
+        yuzunden isi yeniden 'hata' gibi gostermek yanlis olur.
+        """
+        await self._record(job, "ok", filesize, preset=preset)
+        try:
+            await self._delete(job)
+        except Exception:  # noqa: BLE001 - gonderim zaten basarili
+            log.exception("Basarili gonderim sonrasi durum mesaji silinemedi: %s", job.id)
+
     async def _fail(self, job: Job, text: str) -> None:
         self._remember_retry(job)
         last_stage = job.status_stage
@@ -820,6 +859,8 @@ class JobQueue:
             keyboard=self._retry_keyboard(job),
             wait=True,
         )
+        # Hata mesaji kullanicida kalir; sonraki islemlerde gereksiz kart tutma.
+        await self._status.forget(job.chat_id, job.status_message_id)
 
     async def _delivery_uncertain(self, job: Job) -> None:
         """Gonderim yaniti alinamadiginda videoyu tekrar gondermeden bilgilendirir."""
@@ -837,6 +878,7 @@ class JobQueue:
             ),
             wait=True,
         )
+        await self._status.forget(job.chat_id, job.status_message_id)
 
     async def _delete(self, job: Job) -> None:
         """Basarili gonderimden sonra durum mesajini siler."""

@@ -908,7 +908,71 @@ async def main() -> int:
             "send_document cagrilmadi",
         )
         doc_path.unlink(missing_ok=True)
-        print("22) dosya olarak gonderim OK")
+
+        gallery_doc = root / "gallery-doc.jpg"
+        gallery_doc.write_bytes(b"photo")
+        gallery_doc_job = Job(
+            id="gdoc1",
+            user_id=ADMIN.id,
+            chat_id=ADMIN.id,
+            status_message_id=9021,
+            url="https://example.com/photo",
+            preset="gallery",
+            title="Galeri dosyasi",
+            platform="Test",
+            kind="gallery",
+            as_document=True,
+            show_caption=False,
+        )
+        mark = len(bot.calls)
+        await queue._send_gallery(gallery_doc_job, [gallery_doc])
+        check(
+            any(c[0] == "send_document" for c in bot.calls[mark:]),
+            "galeri dosya olarak gonderilmedi",
+        )
+        gallery_doc.unlink(missing_ok=True)
+
+        # Medya ulastiktan sonra DB hatasi basarili gonderimi hataya cevirmemeli.
+        db_status = await queue.send_status(ADMIN.id, "kayit testi")
+        success_job = Job(
+            id="okdb1",
+            user_id=ADMIN.id,
+            chat_id=ADMIN.id,
+            status_message_id=db_status.message_id,
+            url="https://example.com/ok",
+            preset="h:720",
+            title="Kayit testi",
+            platform="Test",
+        )
+        original_record = queue._db.record_download
+
+        async def fail_record(*args, **kwargs):
+            raise RuntimeError("db yazilamadi")
+
+        queue._db.record_download = fail_record  # type: ignore[method-assign]
+        mark = len(bot.calls)
+        try:
+            await queue._finish_success(success_job, 123)
+        finally:
+            queue._db.record_download = original_record  # type: ignore[method-assign]
+        check(
+            any(
+                c[0] == "delete_message"
+                and c[1].get("message_id") == db_status.message_id
+                for c in bot.calls[mark:]
+            ),
+            "DB hatasinda basarili isin durum mesaji silinmedi",
+        )
+        check(
+            not any(
+                c[0] == "edit_message_text"
+                and c[1].get("message_id") == db_status.message_id
+                and "hata" in (c[1].get("text") or "").lower()
+                for c in bot.calls[mark:]
+            ),
+            "DB hatasi basarili gonderimi hataya cevirdi",
+        )
+        print("22) dosya olarak gonderim + basari korumasi OK")
 
         # 23) admin onbellek yonetimi
         cache_stats = await db.cache_stats()
@@ -1080,6 +1144,14 @@ async def main() -> int:
             check(
                 any(c[0] == "delete_message" for c in bot.calls[mark:]),
                 "durum mesaji silinmedi",
+            )
+
+            forgotten = await hub.send(ADMIN.id, "unutulacak durum")
+            await hub.edit(ADMIN.id, forgotten.message_id, "hata", wait=True)
+            await hub.forget(ADMIN.id, forgotten.message_id)
+            check(
+                (ADMIN.id, forgotten.message_id) not in hub._cards,
+                "hata durum karti bellekten cikarilmadi",
             )
         finally:
             await hub.close()
