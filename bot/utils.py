@@ -122,6 +122,15 @@ def is_blocked_host(url: str) -> bool:
         return True
     if host.endswith(BLOCKED_HOST_SUFFIXES):
         return True
+    # Bazi cozuculer 2130706433, 127.1, 0x7f000001 gibi standart disi sayisal
+    # adresleri loopback'e cevirir. ipaddress bunlari reddeder; bu yuzden
+    # sayisal gorunumlu ve gecersiz adresleri de guvenli tarafta reddet.
+    if re.fullmatch(r"0x[0-9a-f]+", host) or re.fullmatch(r"[0-9.]+", host):
+        try:
+            ip = ipaddress.ip_address(host)
+        except ValueError:
+            return True
+        return _blocked_ip(str(ip))
     try:
         ip = ipaddress.ip_address(host)
     except ValueError:

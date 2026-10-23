@@ -70,6 +70,7 @@ from bot.middlewares import UserMiddleware  # noqa: E402
 from bot.queue import DailyLimitError, Job, JobQueue  # noqa: E402
 from bot.status import StatusHub  # noqa: E402
 from bot.utils import (  # noqa: E402
+    is_blocked_host,
     is_blocked_url,
     nearest_height,
     parse_quality,
@@ -393,6 +394,11 @@ async def main() -> int:
             not await is_blocked_url("https://1.1.1.1/video"),
             "genel IP yanlislikla engellendi",
         )
+        for numeric_host in ("2130706433", "127.1", "0x7f000001", "0177.0.0.1"):
+            check(
+                is_blocked_host(f"http://{numeric_host}/"),
+                f"standart disi sayisal adres engellenmedi: {numeric_host}",
+            )
         fake_dns = [(2, 1, 6, "", ("127.0.0.1", 0))]
         with patch("socket.getaddrinfo", return_value=fake_dns):
             check(
