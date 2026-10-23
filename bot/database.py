@@ -25,6 +25,16 @@ CREATE TABLE IF NOT EXISTS users (
     show_caption    INTEGER NOT NULL DEFAULT 1
 );
 
+CREATE TABLE IF NOT EXISTS chats (
+    id          INTEGER PRIMARY KEY,
+    title       TEXT,
+    chat_type   TEXT NOT NULL,
+    first_seen  TEXT NOT NULL DEFAULT (datetime('now')),
+    last_seen   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_chats_type ON chats(chat_type);
+
 CREATE TABLE IF NOT EXISTS downloads (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id      INTEGER NOT NULL,
@@ -140,6 +150,34 @@ class Database:
             rows = await cur.fetchall()
         return [row["id"] for row in rows]
 
+    async def all_group_ids(self) -> list[int]:
+        async with self.conn.execute(
+            "SELECT id FROM chats WHERE chat_type IN ('group', 'supergroup') "
+            "ORDER BY id"
+        ) as cur:
+            rows = await cur.fetchall()
+        return [row["id"] for row in rows]
+
+    async def touch_chat(
+        self, chat_id: int, title: str | None, chat_type: str
+    ) -> None:
+        await self.conn.execute(
+            """
+            INSERT INTO chats(id, title, chat_type)
+            VALUES(?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                title     = excluded.title,
+                chat_type = excluded.chat_type,
+                last_seen = datetime('now')
+            """,
+            (chat_id, title, chat_type),
+        )
+        await self.conn.commit()
+
+    async def remove_chat(self, chat_id: int) -> None:
+        await self.conn.execute("DELETE FROM chats WHERE id = ?", (chat_id,))
+        await self.conn.commit()
+
     async def recent_users(self, limit: int = 10) -> list[dict[str, Any]]:
         async with self.conn.execute(
             "SELECT * FROM users ORDER BY last_seen DESC LIMIT ?", (limit,)
@@ -234,6 +272,9 @@ class Database:
             "users": await scalar("SELECT COUNT(*) FROM users"),
             "users_today": await scalar(
                 "SELECT COUNT(*) FROM users WHERE first_seen >= datetime('now', '-1 day')"
+            ),
+            "groups": await scalar(
+                "SELECT COUNT(*) FROM chats WHERE chat_type IN ('group', 'supergroup')"
             ),
             "downloads_ok": await scalar("SELECT COUNT(*) FROM downloads WHERE status = 'ok'"),
             "downloads_today": await scalar(

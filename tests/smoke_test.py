@@ -39,6 +39,9 @@ from aiogram.types import (  # noqa: E402
     Audio,
     CallbackQuery,
     Chat,
+    ChatMemberLeft,
+    ChatMemberMember,
+    ChatMemberUpdated,
     Document,
     Message,
     PhotoSize,
@@ -256,13 +259,14 @@ def msg_update(
     *,
     caption: str | None = None,
     reply_to: Message | None = None,
+    chat: Chat | None = None,
 ) -> Update:
     return Update(
         update_id=message_id,
         message=Message(
             message_id=message_id,
             date=datetime.now(timezone.utc),
-            chat=Chat(id=user.id, type="private"),
+            chat=chat or Chat(id=user.id, type="private"),
             from_user=user,
             text=text or None,
             caption=caption,
@@ -582,15 +586,51 @@ async def main() -> int:
         check(any("42" in t for t in bot.texts_since(mark)), "/users")
         print("14) /users OK")
 
-        # 15) broadcast
+        # 15) broadcast (kullanicilar + gruplar)
+        group_chat = Chat(id=-100777, type="supergroup", title="Test Grubu")
+        await dp.feed_update(bot, msg_update("/start", 115, chat=group_chat))
+        check(
+            -100777 in await db.all_group_ids(),
+            "grup sohbeti kaydedilmedi",
+        )
         mark = len(bot.calls)
         await dp.feed_update(bot, msg_update("/broadcast deneme duyurusu", 15))
         check(
             any("deneme duyurusu" in t for t in bot.texts_since(mark)),
             "duyuru gonderilmedi",
         )
+        check(
+            any(
+                call[0] == "send_message"
+                and call[1].get("chat_id") == -100777
+                and "deneme duyurusu" in (call[1].get("text") or "")
+                for call in bot.calls[mark:]
+            ),
+            "duyuru gruba gonderilmedi",
+        )
         check("tamamland" in " ".join(bot.texts.values()).lower(), "duyuru raporu yok")
-        print("15) /broadcast OK")
+
+        bot_member = User(id=bot.id, is_bot=True, first_name="Bot")
+        joined = ChatMemberUpdated(
+            chat=Chat(id=-100888, type="supergroup", title="Ekleme Grubu"),
+            from_user=ADMIN,
+            date=datetime.now(timezone.utc),
+            old_chat_member=ChatMemberLeft(user=bot_member),
+            new_chat_member=ChatMemberMember(user=bot_member),
+        )
+        await dp.feed_update(bot, Update(update_id=116, my_chat_member=joined))
+        check(-100888 in await db.all_group_ids(), "gruba eklenme kaydedilmedi")
+
+        left = ChatMemberUpdated(
+            chat=joined.chat,
+            from_user=ADMIN,
+            date=datetime.now(timezone.utc),
+            old_chat_member=ChatMemberMember(user=bot_member),
+            new_chat_member=ChatMemberLeft(user=bot_member),
+        )
+        await dp.feed_update(bot, Update(update_id=117, my_chat_member=left))
+        check(-100888 not in await db.all_group_ids(), "gruptan ayrilma silinmedi")
+        print("15) /broadcast + grup OK")
 
         # 16) cooldown (settings gecici olarak 10 sn yapilir)
         object.__setattr__(settings, "cooldown_sec", 10)

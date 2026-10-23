@@ -35,6 +35,7 @@ Built with Python 3.12 + [aiogram 3](https://github.com/aiogram/aiogram) +
   (`/demote` restores it)
 - 👤 User registration and download statistics (SQLite)
 - 🛠 Admin panel: `/stats`, `/users`, `/cache`, `/broadcast`
+- 📣 Broadcast reaches registered users **and groups** where the bot is present
 - 🧹 Temporary files are cleaned periodically and on graceful shutdown
 - 🍪 `cookies.txt` support for Instagram/TikTok
 - 🔄 Automatic yt-dlp + gallery-dl update on Docker startup (`AUTO_UPDATE_YTDLP=1`)
@@ -255,14 +256,18 @@ a clear error. At most 3 links are processed per message.
 | `/ayar` | everyone | Personal defaults: quality, audio-only, captions |
 | `/me` | everyone | Your own usage statistics |
 | `/admin` | admin | Admin panel with buttons |
-| `/stats` | admin | User/download statistics |
+| `/stats` | admin | User, group and download statistics |
 | `/users` | admin | Last 10 users (`⭐` = unlimited access) |
 | `/cache` | admin | Cache count/size and cleanup buttons |
 | `/cache temizle 7` | admin | Delete cache entries older than 7 days |
 | `/cache tum` | admin | Clear the entire cache |
-| `/broadcast <message>` | admin | Send an announcement to everyone |
+| `/broadcast <message>` | admin | Send an announcement to all users and recorded groups |
 | `/promote @username` | admin | Grant unlimited daily downloads (replying to a message also works) |
 | `/demote @username` | admin | Revoke unlimited access |
+
+`/broadcast` also sends to groups where the bot is present. Groups are recorded
+when the bot is added or sees activity in them; a group is removed from the list
+when the bot leaves or is kicked.
 
 Users promoted with `/promote` are not subject to the daily download limit.
 The privilege remains until `/demote` is used. The user sees

@@ -29,6 +29,7 @@ ile yazıldı, Docker ile çalışacak şekilde hazırlandı.
 - ⭐ Yetki yükseltme: `/promote @kullanıcıadı` ile kullanıcının günlük limiti kaldırılır (`/demote` ile geri alınır)
 - 👤 Kullanıcı kaydı, indirme istatistikleri (SQLite)
 - 🛠 Admin paneli: `/stats`, `/users`, `/cache`, `/broadcast`
+- 📣 Duyuru, kayıtlı kullanıcılara **ve botun bulunduğu gruplara** gönderilir
 - 🧹 Geçici dosyalar periyodik olarak ve kapanışta temizlenir
 - 🍪 Instagram/TikTok için `cookies.txt` desteği
 - 🔄 Docker açılışında yt-dlp + gallery-dl otomatik güncelleme (`AUTO_UPDATE_YTDLP=1`)
@@ -244,14 +245,18 @@ net bir hata gösterir. Bir mesajda en fazla 3 bağlantı işlenir.
 | `/ayar` | herkes | Kişisel varsayılanlar: kalite, ses, caption |
 | `/me` | herkes | Kendi kullanım istatistikleri |
 | `/admin` | admin | Butonlu admin paneli |
-| `/stats` | admin | Kullanıcı/indirme istatistikleri |
+| `/stats` | admin | Kullanıcı/grup/indirme istatistikleri |
 | `/users` | admin | Son 10 kullanıcı (`⭐` = sınırsız hak) |
 | `/cache` | admin | Önbellek adedi/boyutu ve temizleme butonları |
 | `/cache temizle 7` | admin | 7 günden eski önbellek kayıtlarını sil |
 | `/cache tum` | admin | Tüm önbelleği sil |
-| `/broadcast <mesaj>` | admin | Herkese duyuru |
+| `/broadcast <mesaj>` | admin | Tüm kullanıcılara ve kayıtlı gruplara duyuru |
 | `/promote @kullanıcıadı` | admin | Kullanıcıya sınırsız günlük indirme hakkı ver (mesaja yanıt da olur) |
 | `/demote @kullanıcıadı` | admin | Sınırsız hakkı geri al |
+
+`/broadcast` botun bulunduğu gruplara da gönderilir. Gruplar bot gruba
+eklendiğinde veya grupta etkinlik gördüğünde kaydedilir; bot gruptan ayrılır ya
+da atılırsa listeden çıkarılır.
 
 `/promote` ile yetkilendirilen kullanıcıya günlük indirme limiti uygulanmaz.
 Hak, `/demote` yazılana kadar geçerlidir. Kullanıcı `/me` çıktısında

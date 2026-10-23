@@ -43,6 +43,7 @@ def _stats_text(stats: dict[str, Any], *, queue: JobQueue) -> str:
     return (
         "<b>📊 Bot istatistikleri</b>\n"
         f"👥 Kullanıcı: <b>{stats['users']}</b> (bugün +{stats['users_today']})\n"
+        f"💬 Grup: <b>{stats.get('groups', 0)}</b>\n"
         f"⬇️ Başarılı indirme: <b>{stats['downloads_ok']}</b> "
         f"(bugün {stats['downloads_today']})\n"
         f"❌ Hata: {stats['errors']}\n"
@@ -105,7 +106,7 @@ async def cmd_admin(message: Message) -> None:
         "/stats — istatistikler\n"
         "/users — son kullanıcılar\n"
         "/cache — önbellek yönetimi\n"
-        "/broadcast &lt;mesaj&gt; — herkese duyuru\n"
+        "/broadcast &lt;mesaj&gt; — kullanıcılara ve gruplara duyuru\n"
         "/promote @kullanıcıadı — sınırsız günlük indirme hakkı ver\n"
         "/demote @kullanıcıadı — sınırsız hakkı geri al",
         reply_markup=admin_keyboard(),
@@ -183,32 +184,55 @@ async def cmd_broadcast(message: Message, db: Database) -> None:
         return
 
     user_ids = await db.all_user_ids()
-    status = await message.answer(f"📣 Gönderim başladı: {len(user_ids)} kullanıcı…")
+    group_ids = await db.all_group_ids()
+    targets = [(user_id, False) for user_id in user_ids]
+    targets.extend((group_id, True) for group_id in group_ids)
+    status = await message.answer(
+        f"📣 Gönderim başladı: {len(user_ids)} kullanıcı, "
+        f"{len(group_ids)} grup…"
+    )
     sent = failed = 0
 
-    for index, user_id in enumerate(user_ids, start=1):
-        for attempt in range(2):
+    for index, (target_id, is_group) in enumerate(targets, start=1):
+        for attempt in range(3):
             try:
-                await message.bot.send_message(user_id, text)
+                await message.bot.send_message(target_id, text)
                 sent += 1
                 break
             except TelegramRetryAfter as exc:
-                if attempt == 0:
+                if attempt < 2:
                     await asyncio.sleep(exc.retry_after + 1)
                     continue
                 failed += 1
-            except (TelegramForbiddenError, TelegramBadRequest):
+                break
+            except TelegramForbiddenError:
                 failed += 1
+                if is_group:
+                    await db.remove_chat(target_id)
+                break
+            except TelegramBadRequest as exc:
+                failed += 1
+                if is_group and any(
+                    marker in str(exc).lower()
+                    for marker in (
+                        "chat not found",
+                        "bot was kicked",
+                        "bot is not a member",
+                        "not enough rights",
+                        "have no rights",
+                    )
+                ):
+                    await db.remove_chat(target_id)
                 break
             except Exception:  # noqa: BLE001
-                log.exception("Yayin hatasi: %s", user_id)
+                log.exception("Yayin hatasi: %s", target_id)
                 failed += 1
                 break
         await asyncio.sleep(0.05)
         if index % 25 == 0:
             with suppress(TelegramBadRequest):
                 await status.edit_text(
-                    f"📣 Gönderiliyor… {index}/{len(user_ids)} "
+                    f"📣 Gönderiliyor… {index}/{len(targets)} "
                     f"(✅ {sent} • ❌ {failed})"
                 )
 

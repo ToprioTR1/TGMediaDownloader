@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from aiogram import Router
+from aiogram import Bot, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (
     CallbackQuery,
+    ChatMemberUpdated,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
@@ -16,6 +17,23 @@ from ..database import Database
 from ..utils import escape, human_size
 
 router = Router(name="start")
+
+
+@router.my_chat_member()
+async def on_my_chat_member(
+    event: ChatMemberUpdated, db: Database, bot: Bot
+) -> None:
+    """Bot gruba eklendiginde/ayrildiginda sohbet kaydini gunceller."""
+    chat_type = getattr(event.chat.type, "value", event.chat.type)
+    if chat_type not in {"group", "supergroup"}:
+        return
+    status = getattr(
+        event.new_chat_member.status, "value", event.new_chat_member.status
+    )
+    if event.new_chat_member.user.id == bot.id and status in {"left", "kicked"}:
+        await db.remove_chat(event.chat.id)
+    else:
+        await db.touch_chat(event.chat.id, event.chat.title, str(chat_type))
 
 
 def _home_keyboard() -> InlineKeyboardMarkup:
