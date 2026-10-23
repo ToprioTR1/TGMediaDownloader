@@ -22,7 +22,10 @@ ile yazıldı, Docker ile çalışacak şekilde hazırlandı.
 - ⚙️ `/ayar` ile kişisel varsayılanlar: kalite, ses tercihi, caption
 - 🔘 Videoların altında `🔗 Kaynak` · `🎵 Ses olarak al` butonları
 - 📝 Medya açıklamasındaki (caption) ve yanıtlanan mesajdaki bağlantılar da işlenir
-- 🖼 Instagram fotoğraf / carousel gönderileri (gallery-dl ile, albüm olarak)
+- 🖼 Instagram fotoğraf / carousel gönderileri (gallery-dl ile, albüm olarak;
+  `dosya` yazılırsa belge olarak)
+- 🚫 Alan adı veya DNS sonucu özel ağ, loopback ya da link-local adrese çıkan
+  bağlantılar indirilmeden reddedilir
 - 🧵 Kuyruk sistemi: aynı anda N indirme, kullanıcı başına kuyruk limiti
 - ⏱ İlerleme mesajı (yüzde, hız, kalan süre)
 - 📉 Günlük indirme limiti ve spam koruması (cooldown)
@@ -30,7 +33,7 @@ ile yazıldı, Docker ile çalışacak şekilde hazırlandı.
 - 👤 Kullanıcı kaydı, indirme istatistikleri (SQLite)
 - 🛠 Admin paneli: `/stats`, `/users`, `/cache`, `/broadcast`
 - 📣 Duyuru, kayıtlı kullanıcılara **ve botun bulunduğu gruplara** gönderilir
-- 🧹 Geçici dosyalar periyodik olarak ve kapanışta temizlenir
+- 🧹 Botun oluşturduğu geçici dosyalar (`dl-*`) periyodik olarak ve kapanışta temizlenir
 - 🍪 Instagram/TikTok için `cookies.txt` desteği
 - 🔄 Docker açılışında yt-dlp + gallery-dl otomatik güncelleme (`AUTO_UPDATE_YTDLP=1`)
 - 🐳 Docker imajında ffmpeg hazır gelir
@@ -128,10 +131,10 @@ Tüm ayarlar `.env` üzerinden okunur ([bot/config.py](bot/config.py)):
 | `CONCURRENCY` | `2` | Aynı anda çalışan indirme sayısı |
 | `MAX_UPLOAD_MB` | `50` | Telegram'a gönderilebilecek maks. boyut |
 | `UPLOAD_TIMEOUT_SEC` | `600` | Medya yükleme isteği zaman aşımı (yavaş bağlantı veya 2 GB yerel Bot API için artırın) |
-| `MAX_HEIGHT` | `0` | Bu çözünürlüğün üstünü listede gösterme (0 = sınırsız) |
+| `MAX_HEIGHT` | `0` | Bu çözünürlüğün üstünü reddet; uygun format yoksa bağlantı reddedilir (0 = sınırsız) |
 | `MAX_DURATION_SEC` | `1800` | Maks. video süresi (0 = sınırsız) |
 | `MAX_QUEUE_PER_USER` | `3` | Kullanıcı başına bekleyen iş limiti |
-| `DAILY_LIMIT` | `20` | Günlük indirme limiti (0 = sınırsız) |
+| `DAILY_LIMIT` | `20` | Günlük indirme limiti, yerel gece yarısında sıfırlanır (0 = sınırsız) |
 | `COOLDOWN_SEC` | `10` | İki istek arası minimum süre |
 | `QUALITY_INSTAGRAM` | `1280` | Kalite yazılmayan Instagram linklerinde hedef |
 | `QUALITY_TIKTOK` | `1012` | Kalite yazılmayan TikTok linklerinde hedef |
@@ -248,8 +251,8 @@ net bir hata gösterir. Bir mesajda en fazla 3 bağlantı işlenir.
 | `/stats` | admin | Kullanıcı/grup/indirme istatistikleri |
 | `/users` | admin | Son 10 kullanıcı (`⭐` = sınırsız hak) |
 | `/cache` | admin | Önbellek adedi/boyutu ve temizleme butonları |
-| `/cache temizle 7` | admin | 7 günden eski önbellek kayıtlarını sil |
-| `/cache tum` | admin | Tüm önbelleği sil |
+| `/cache temizle 7` | admin | 7 günden eski önbellek kayıtlarını sil (en az 1 gün) |
+| `/cache tum` | admin | Onay isteyip tüm önbelleği sil |
 | `/broadcast <mesaj>` | admin | Tüm kullanıcılara ve kayıtlı gruplara duyuru |
 | `/promote @kullanıcıadı` | admin | Kullanıcıya sınırsız günlük indirme hakkı ver (mesaja yanıt da olur) |
 | `/demote @kullanıcıadı` | admin | Sınırsız hakkı geri al |
@@ -286,19 +289,22 @@ bot/
     └── admin.py     # admin komutları (promote/demote dahil)
 ```
 
-Akış: `handlers/download.py` → `downloader.probe()` → `utils.nearest_height()`
-(+ boyut koruması) → `queue.JobQueue.submit()` → işçi `downloader.download()`
-→ `bot.send_video()` → `database.cache_put()` + `database.record_download()`.
+Akış: `handlers/download.py` → `downloader.probe()` →
+`handlers/download.py:_resolve_preset()` (en yakın kalite + boyut koruması) →
+`queue.JobQueue.submit()` → işçi `downloader.download()` → `bot.send_video()`
+→ `database.cache_put()` + `database.record_download()`.
 Instagram fotoğraf gönderilerinde yt-dlp başarısız olursa `gallery.py` devreye girer.
 
 ## Test
 
 `tests/smoke_test.py` sahte bir Bot nesnesiyle uçtan uca akışı dener (gerçek
 ağdan küçük bir TikTok videosu indirir; varsayılan/istenen kalite, MP3, dosya
-olarak gönderim, file_id önbelleği, aynı linkin tekilleştirilmesi, yeniden deneme,
-caption ve yanıt desteği, boyut koruması, gallery-dl ile fotoğraf gönderimi,
-`/ayar`, geçici dosya temizliği, durum mesajlarının birleştirilmesi, `RetryAfter`,
-geçici ağ hataları ve DB/admin/önbellek adımlarını kontrol eder):
+olarak gönderim, file_id önbelleği, aynı linkin tekilleştirilmesi, yeniden deneme
+sahipliği, günlük limit, caption ve yanıt desteği, boyut koruması, gallery-dl ile
+fotoğraf gönderimi (belge modu dahil), `/ayar`, geçici dosya temizliği,
+SSRF/özel adres engeli, durum mesajlarının birleştirilmesi, `RetryAfter`, geçici
+ağ hataları, başarılı gönderimin korunması ve DB/admin/önbellek adımlarını
+kontrol eder):
 
 ```bash
 pip install -r requirements.txt

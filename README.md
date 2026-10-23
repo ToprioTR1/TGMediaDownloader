@@ -27,7 +27,10 @@ Built with Python 3.12 + [aiogram 3](https://github.com/aiogram/aiogram) +
 - ⚙️ Per-user defaults via `/ayar`: target quality, audio-only links, captions
 - 🔘 `🔗 Source` · `🎵 Get audio` buttons under videos
 - 📝 Links in media captions and in replied-to messages are processed too
-- 🖼 Instagram photo / carousel posts (via gallery-dl, sent as an album)
+- 🖼 Instagram photo / carousel posts (via gallery-dl, sent as an album;
+  `dosya` sends them as documents)
+- 🚫 URLs whose host or DNS result points to a private, loopback or link-local
+  address are rejected before downloading
 - 🧵 Job queue: N concurrent downloads, per-user queue limit
 - ⏱ Progress message (percentage, speed, ETA)
 - 📉 Daily download limit and spam protection (cooldown)
@@ -36,7 +39,7 @@ Built with Python 3.12 + [aiogram 3](https://github.com/aiogram/aiogram) +
 - 👤 User registration and download statistics (SQLite)
 - 🛠 Admin panel: `/stats`, `/users`, `/cache`, `/broadcast`
 - 📣 Broadcast reaches registered users **and groups** where the bot is present
-- 🧹 Temporary files are cleaned periodically and on graceful shutdown
+- 🧹 Bot-owned temporary downloads (`dl-*`) are cleaned periodically and on graceful shutdown
 - 🍪 `cookies.txt` support for Instagram/TikTok
 - 🔄 Automatic yt-dlp + gallery-dl update on Docker startup (`AUTO_UPDATE_YTDLP=1`)
 - 🐳 ffmpeg comes preinstalled in the Docker image
@@ -135,10 +138,10 @@ All settings are read from `.env` ([bot/config.py](bot/config.py)):
 | `CONCURRENCY` | `2` | Number of concurrent downloads |
 | `MAX_UPLOAD_MB` | `50` | Maximum size that can be sent to Telegram |
 | `UPLOAD_TIMEOUT_SEC` | `600` | Timeout for media upload requests (raise it for slow links or 2 GB local Bot API) |
-| `MAX_HEIGHT` | `0` | Hide resolutions above this from the format list (0 = unlimited) |
+| `MAX_HEIGHT` | `0` | Reject resolutions above this; links with no fitting format are rejected (0 = unlimited) |
 | `MAX_DURATION_SEC` | `1800` | Maximum video duration (0 = unlimited) |
 | `MAX_QUEUE_PER_USER` | `3` | Pending jobs per user |
-| `DAILY_LIMIT` | `20` | Daily download limit (0 = unlimited) |
+| `DAILY_LIMIT` | `20` | Daily download limit, resets at local midnight (0 = unlimited) |
 | `COOLDOWN_SEC` | `10` | Minimum seconds between two requests |
 | `QUALITY_INSTAGRAM` | `1280` | Target for Instagram links without a quality |
 | `QUALITY_TIKTOK` | `1012` | Target for TikTok links without a quality |
@@ -259,8 +262,8 @@ a clear error. At most 3 links are processed per message.
 | `/stats` | admin | User, group and download statistics |
 | `/users` | admin | Last 10 users (`⭐` = unlimited access) |
 | `/cache` | admin | Cache count/size and cleanup buttons |
-| `/cache temizle 7` | admin | Delete cache entries older than 7 days |
-| `/cache tum` | admin | Clear the entire cache |
+| `/cache temizle 7` | admin | Delete cache entries older than 7 days (minimum 1) |
+| `/cache tum` | admin | Ask for confirmation, then clear the entire cache |
 | `/broadcast <message>` | admin | Send an announcement to all users and recorded groups |
 | `/promote @username` | admin | Grant unlimited daily downloads (replying to a message also works) |
 | `/demote @username` | admin | Revoke unlimited access |
@@ -297,9 +300,10 @@ bot/
     └── admin.py     # admin commands (including promote/demote)
 ```
 
-Flow: `handlers/download.py` → `downloader.probe()` → `utils.nearest_height()`
-(+ size guard) → `queue.JobQueue.submit()` → worker `downloader.download()`
-→ `bot.send_video()` → `database.cache_put()` + `database.record_download()`.
+Flow: `handlers/download.py` → `downloader.probe()` →
+`handlers/download.py:_resolve_preset()` (nearest quality + size guard) →
+`queue.JobQueue.submit()` → worker `downloader.download()` → `bot.send_video()`
+→ `database.cache_put()` + `database.record_download()`.
 For Instagram photo posts, `gallery.py` takes over if yt-dlp fails.
 
 ## Tests
@@ -307,9 +311,11 @@ For Instagram photo posts, `gallery.py` takes over if yt-dlp fails.
 `tests/smoke_test.py` exercises the end-to-end flow with a fake Bot object (it
 downloads a small TikTok video from the real network and checks default/requested
 quality, MP3, document delivery, the file_id cache, in-flight deduplication,
-retry, caption and reply support, the size guard, photo delivery via gallery-dl,
-`/ayar`, temporary-file cleanup, status-message coalescing, `RetryAfter`,
-transient network handling, and the DB/admin/cache steps):
+retry ownership, daily-limit enforcement, caption and reply support, the size
+guard, photo delivery via gallery-dl (including document mode), `/ayar`,
+temporary-file cleanup, SSRF/private-address blocking, status-message
+coalescing, `RetryAfter`, transient network handling, successful-delivery
+protection, and the DB/admin/cache steps):
 
 ```bash
 pip install -r requirements.txt
