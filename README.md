@@ -29,8 +29,9 @@ Built with Python 3.12 + [aiogram 3](https://github.com/aiogram/aiogram) +
 - 📝 Links in media captions and in replied-to messages are processed too
 - 🖼 Instagram photo / carousel posts (via gallery-dl, sent as an album;
   `dosya` sends them as documents)
-- 🚫 URLs whose host or DNS result points to a private, loopback or link-local
-  address are rejected before downloading
+- 🚫 SSRF protection on every Python TCP `connect`: redirects, DNS rebinding,
+  secondary media URLs, and cloud-metadata addresses are rejected; a host
+  firewall config for container egress is included
 - 🧵 Job queue: N concurrent downloads, per-user queue limit
 - ⏱ Progress message (percentage, speed, ETA)
 - 📉 Daily download limit and spam protection (cooldown)
@@ -152,8 +153,10 @@ All settings are read from `.env` ([bot/config.py](bot/config.py)):
 | `GALLERY_LIMIT` | `10` | Maximum media per post (Telegram album limit is 10) |
 | `AUTO_UPDATE_YTDLP` | `1` | Update yt-dlp + gallery-dl on Docker startup |
 | `COOKIES_FILE` | — | Path to `cookies.txt` (for sites that require cookies) |
-| `TELEGRAM_API_URL` | empty | Local Bot API server URL |
-| `PROXY_URL` | empty | HTTP(S)/SOCKS proxy for downloads |
+| `TELEGRAM_API_URL` | empty | Local Bot API server URL (its host is allowlisted automatically) |
+| `PROXY_URL` | empty | HTTP(S)/SOCKS proxy for downloads (not used unless `NETGUARD_ALLOW_PROXY=1`) |
+| `NETGUARD_ALLOW` | empty | Extra trusted `host:port` endpoints for the SSRF guard |
+| `NETGUARD_ALLOW_PROXY` | `0` | Use `PROXY_URL`; only when the proxy blocks private/metadata egress itself |
 | `DOWNLOAD_DIR` | `./data/downloads` | Temporary download directory |
 | `DB_PATH` | `./data/bot.db` | SQLite database |
 | `LOG_LEVEL` | `INFO` | Log level |
@@ -195,6 +198,99 @@ docker compose -f docker-compose.yml -f docker-compose.local-api.yml up -d --bui
 
 This file starts the `aiogram/telegram-bot-api` image, connects the bot to it,
 and sets `MAX_UPLOAD_MB` to `2000`.
+
+## Network Egress / SSRF Protection
+
+User-supplied URLs are untrusted. The bot checks every outbound Python TCP
+connection, not only the first URL string:
+
+- The destination IP is checked at `connect()` time. A redirect, a second
+  media/segment request, or a DNS answer that changes after the first lookup is
+  still rejected when it reaches a private, loopback, link-local, CGNAT,
+  multicast, reserved, documentation, or cloud-metadata address.
+- DNS validation failure is treated as a rejection (fail closed), never as
+  permission to continue.
+- yt-dlp is forced to use its native HLS downloader; gallery-dl runs with
+  `--config-ignore` and receives the same guard in its subprocess through a
+  `sitecustomize` bootstrap.
+- The host in `TELEGRAM_API_URL` (including a local Bot API server) is
+  allowlisted automatically. Add other trusted endpoints with `NETGUARD_ALLOW`.
+
+The in-process guard cannot see traffic from separate native processes such as
+`ffmpeg`, and an enabled proxy hides the final destination. **Apply the host
+firewall to cover container egress:**
+
+```bash
+sudo nft -f deploy/ssrf-firewall.nft
+sudo nft list table inet ssrf_egress
+```
+
+`docker-compose.yml` places the bot on `172.28.240.0/24` at `172.28.240.3`; the
+local Bot API container is `172.28.240.2:8081`. The nftables rules allow only
+that API endpoint and drop new connections from the bot to private/metadata
+ranges for **all** processes, including `ffmpeg`. If this subnet conflicts with
+your VPS, change it in both compose files and in the firewall file. Keep IPv6
+disabled on this Docker network; if you enable it, also add the commented `ip6`
+rules, otherwise IPv4-mapped IPv6 addresses could bypass the IPv4 rules.
+
+Persist the rules according to your distribution, for example:
+
+```bash
+sudo sh -c 'nft list ruleset > /etc/nftables.conf'
+sudo systemctl enable --now nftables
+```
+
+If the local Bot API runs on the host (`host.docker.internal:8081`), enable the
+commented allow rule in `deploy/ssrf-firewall.nft` and add
+`NETGUARD_ALLOW=172.28.240.1:8081` to `.env`.
+
+If `PROXY_URL` or a standard `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY`
+environment variable is set, the guard cannot validate the final destination.
+Downloads therefore do **not** use the proxy by default and connect directly,
+where every target is checked. Set `NETGUARD_ALLOW_PROXY=1` only if the proxy
+itself blocks private/metadata egress, and apply equivalent rules at the proxy.
+Do not use a proxy as an SSRF boundary.
+
+If that proxy is on a private address (for example a host-local proxy at
+`172.28.240.1:3128`), add a narrow allow rule before the private-range drop;
+otherwise the host firewall blocks the proxy itself:
+
+```nft
+ip saddr 172.28.240.3 ip daddr 172.28.240.1 tcp dport 3128 accept
+```
+
+Keep the rule as narrow as possible. The proxy must enforce its own egress
+policy; the bot's socket guard only sees the proxy connection.
+
+Without Docker, apply an equivalent nftables `output` rule for the UID that runs
+`python -m bot` (replace `1000`):
+
+```nft
+table inet ssrf_egress_host {
+    chain output {
+        type filter hook output priority -10; policy accept;
+        meta skuid 1000 ip daddr {
+            0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8,
+            168.63.129.16/32, 169.254.0.0/16, 172.16.0.0/12,
+            192.0.0.0/24, 192.0.2.0/24, 192.88.99.0/24,
+            192.168.0.0/16, 198.18.0.0/15, 198.51.100.0/24,
+            203.0.113.0/24, 224.0.0.0/4, 240.0.0.0/4
+        } drop
+    }
+}
+```
+
+Also add equivalent `ip6` rules (or disable IPv6) and allow the local Bot API
+port if you use one.
+
+Remaining limitation: the host firewall is the only layer that covers native
+libraries/subprocesses and proxy-tunneled destinations. Without it, an extractor
+that invokes `ffmpeg` (or another native downloader) and a proxy can still reach
+internal addresses. The in-app guard alone does not claim to cover those paths.
+Host `forward` rules also cannot see the container's own loopback or `AF_UNIX`
+sockets; the in-process guard blocks Python loopback, and the bot image does not
+run local services. UDP/QUIC is covered by the host firewall only for private
+destinations, not by the Python socket hook.
 
 ## Usage
 
@@ -321,10 +417,14 @@ protection, and the DB/admin/cache steps):
 pip install -r requirements.txt
 $env:PYTHONPATH="." ; python tests/smoke_test.py    # PowerShell
 PYTHONPATH=. python tests/smoke_test.py             # bash
+
+python -m unittest tests.test_netguard -v           # SSRF/connect regression tests
 ```
 
-The test creates its own data under `.tmp/` and does not make real requests to
-Telegram.
+The smoke test creates its own data under `.tmp/` and does not make real requests
+to Telegram. The netguard tests use only local sockets (loopback allowlist,
+redirect, DNS rebinding, fail-closed DNS, and the gallery-dl subprocess
+bootstrap).
 
 ## Troubleshooting
 
@@ -334,6 +434,8 @@ Telegram.
 | `HTTP Error 403` / `429` | Refresh cookies, wait a few minutes; the VPS IP may be blocked |
 | `Sign in to confirm you're not a bot` (YouTube) | Add cookies or configure `PROXY_URL` |
 | `ffmpeg bulunamadı` (ffmpeg not found) | It is included in the Docker image; locally run `apt install ffmpeg` / `winget install Gyan.FFmpeg` |
+| Download fails with `güvenlik politikası bu hedefi engelledi` | The target is private/metadata, DNS failed, or `PROXY_URL` is set without `NETGUARD_ALLOW_PROXY=1` (the proxy is bypassed; the direct connection may fail); check `docker compose logs -f bot` |
+| Downloads work only after disabling the firewall | Re-apply `deploy/ssrf-firewall.nft`; make sure the bot still uses `172.28.240.3` and the local API allow rule matches |
 | One site stops working while others work | `docker compose restart bot` (yt-dlp updates on startup) or `docker compose build --no-cache` |
 | Instagram photos are not downloading | Is `gallery-dl` installed? (`GALLERY_ENABLED=1`); private posts require `cookies.txt` |
 | `Request Entity Too Large` | The 50 MB limit; choose a lower quality or set up a local Bot API server |

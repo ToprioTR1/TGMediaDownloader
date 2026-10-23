@@ -24,8 +24,9 @@ ile yazıldı, Docker ile çalışacak şekilde hazırlandı.
 - 📝 Medya açıklamasındaki (caption) ve yanıtlanan mesajdaki bağlantılar da işlenir
 - 🖼 Instagram fotoğraf / carousel gönderileri (gallery-dl ile, albüm olarak;
   `dosya` yazılırsa belge olarak)
-- 🚫 Alan adı veya DNS sonucu özel ağ, loopback ya da link-local adrese çıkan
-  bağlantılar indirilmeden reddedilir
+- 🚫 Her Python TCP `connect` anında SSRF koruması: yönlendirmeler, DNS
+  rebinding, ikincil medya URL'leri ve bulut metadata adresleri reddedilir;
+  konteyner çıkışı için host güvenlik duvarı yapılandırması dahildir
 - 🧵 Kuyruk sistemi: aynı anda N indirme, kullanıcı başına kuyruk limiti
 - ⏱ İlerleme mesajı (yüzde, hız, kalan süre)
 - 📉 Günlük indirme limiti ve spam koruması (cooldown)
@@ -145,8 +146,10 @@ Tüm ayarlar `.env` üzerinden okunur ([bot/config.py](bot/config.py)):
 | `GALLERY_LIMIT` | `10` | Gönderi başına en fazla medya (Telegram albüm limiti 10) |
 | `AUTO_UPDATE_YTDLP` | `1` | Docker açılışında yt-dlp + gallery-dl güncelle |
 | `COOKIES_FILE` | — | `cookies.txt` yolu (çerez gereken siteler için) |
-| `TELEGRAM_API_URL` | boş | Yerel Bot API sunucusu adresi |
-| `PROXY_URL` | boş | İndirmeler için HTTP(S)/SOCKS proxy |
+| `TELEGRAM_API_URL` | boş | Yerel Bot API sunucusu adresi (host'u otomatik izin listesine eklenir) |
+| `PROXY_URL` | boş | İndirmeler için HTTP(S)/SOCKS proxy (`NETGUARD_ALLOW_PROXY=1` olmadan kullanılmaz) |
+| `NETGUARD_ALLOW` | boş | SSRF korumasında ek izin verilecek güvenilir `host:port` uçları |
+| `NETGUARD_ALLOW_PROXY` | `0` | `PROXY_URL`'i kullan; yalnızca proxy kendisi özel/metadata çıkışını engelliyorsa |
 | `DOWNLOAD_DIR` | `./data/downloads` | Geçici indirme klasörü |
 | `DB_PATH` | `./data/bot.db` | SQLite veritabanı |
 | `LOG_LEVEL` | `INFO` | Log seviyesi |
@@ -186,6 +189,99 @@ docker compose -f docker-compose.yml -f docker-compose.local-api.yml up -d --bui
 
 Bu dosya `aiogram/telegram-bot-api` imajını ayağa kaldırır, botu ona bağlar ve
 `MAX_UPLOAD_MB` değerini `2000` yapar.
+
+## Ağ Çıkışı / SSRF Koruması
+
+Kullanıcıdan gelen URL'ler güvenilmezdir. Bot yalnızca ilk URL metnini değil,
+her giden Python TCP bağlantısını denetler:
+
+- Hedef IP `connect()` anında kontrol edilir. Yönlendirme, ikinci bir
+  medya/segment isteği veya ilk çözümlemeden sonra değişen bir DNS yanıtı özel
+  ağ, loopback, link-local, CGNAT, multicast, rezerve, dokümantasyon ya da bulut
+  metadata adresine ulaşırsa yine reddedilir.
+- DNS doğrulaması başarısız olursa istek reddedilir (fail closed); devam izni
+  verilmez.
+- yt-dlp yerel HLS indiricisine zorlanır; gallery-dl `--config-ignore` ile
+  çalışır ve aynı korumayı `sitecustomize` önyüklemesiyle alt sürecine taşır.
+- `TELEGRAM_API_URL` host'u (yerel Bot API dahil) otomatik izin listesine
+  eklenir. Başka güvenilir uçları `NETGUARD_ALLOW` ile ekleyin.
+
+Süreç içi koruma `ffmpeg` gibi ayrı yerel süreçlerin trafiğini göremez;
+etkinleştirilmiş bir proxy ise nihai hedefi gizler. **Konteyner çıkışını
+kapsamak için host güvenlik duvarını uygulayın:**
+
+```bash
+sudo nft -f deploy/ssrf-firewall.nft
+sudo nft list table inet ssrf_egress
+```
+
+`docker-compose.yml` botu `172.28.240.0/24` ağında `172.28.240.3` adresine
+koyar; yerel Bot API konteyneri `172.28.240.2:8081` olur. nftables kuralları
+yalnızca bu API ucuna izin verir ve bottan özel/metadata aralıklarına yeni
+bağlantıları **ffmpeg dahil** tüm süreçler için düşürür. Bu alt ağ VPS'inizle
+çakışıyorsa hem compose dosyalarında hem firewall dosyasında değiştirin. Bu
+Docker ağında IPv6'yı kapalı tutun; açarsanız dosyadaki yorumlu `ip6`
+kurallarını da ekleyin, aksi halde IPv4-mapped IPv6 adresleri IPv4 kurallarını
+atlayabilir.
+
+Kuralları dağıtımınıza göre kalıcı yapın, örneğin:
+
+```bash
+sudo sh -c 'nft list ruleset > /etc/nftables.conf'
+sudo systemctl enable --now nftables
+```
+
+Yerel Bot API host'ta çalışıyorsa (`host.docker.internal:8081`),
+`deploy/ssrf-firewall.nft` içindeki yorumlu izin satırını açın ve `.env`
+dosyasına `NETGUARD_ALLOW=172.28.240.1:8081` ekleyin.
+
+`PROXY_URL` veya standart `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` ortam
+değişkenlerinden biri ayarlıysa koruma nihai hedefi doğrulayamaz. Bu nedenle
+indirmeler varsayılan olarak proxy'yi **kullanmaz** ve doğrudan bağlanır; her
+hedef yine soket katmanında denetlenir. `NETGUARD_ALLOW_PROXY=1` yalnızca proxy
+kendisi özel/metadata çıkışını engelliyorsa kullanılmalıdır; eşdeğer kuralları
+proxy tarafında da uygulayın. Proxy'yi SSRF sınırı olarak kullanmayın.
+
+Proxy özel bir adreste ise (örneğin host üzerinde `172.28.240.1:3128`), özel
+ağ drop kuralından önce dar bir izin kuralı ekleyin; aksi halde host güvenlik
+duvarı proxy'nin kendisini engeller:
+
+```nft
+ip saddr 172.28.240.3 ip daddr 172.28.240.1 tcp dport 3128 accept
+```
+
+Kuralı olabildiğince dar tutun. Proxy kendi çıkış politikasını uygulamalıdır;
+botun soket koruması yalnızca proxy bağlantısını görür.
+
+Docker olmadan, `python -m bot` çalıştıran UID için eşdeğer nftables `output`
+kuralını uygulayın (`1000` yerine kendi UID'niz):
+
+```nft
+table inet ssrf_egress_host {
+    chain output {
+        type filter hook output priority -10; policy accept;
+        meta skuid 1000 ip daddr {
+            0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8,
+            168.63.129.16/32, 169.254.0.0/16, 172.16.0.0/12,
+            192.0.0.0/24, 192.0.2.0/24, 192.88.99.0/24,
+            192.168.0.0/16, 198.18.0.0/15, 198.51.100.0/24,
+            203.0.113.0/24, 224.0.0.0/4, 240.0.0.0/4
+        } drop
+    }
+}
+```
+
+Ayrıca eşdeğer `ip6` kurallarını ekleyin (veya IPv6'yı kapatın) ve yerel Bot
+API kullanıyorsanız ilgili portu açın.
+
+Kalan sınır: yerel kütüphane/alt süreçleri ve proxy üzerinden tünellenen
+hedefleri yalnızca host güvenlik duvarı kapsar. Firewall uygulanmazsa `ffmpeg`
+(veya başka bir yerel indirici) çağıran bir extractor ve proxy hâlâ iç adreslere
+ulaşabilir. Uygulama içi koruma tek başına bu yolları kapsadığını iddia etmez.
+Host `forward` kuralları konteynerin kendi loopback'ini veya `AF_UNIX`
+soketlerini göremez; uygulama içi koruma Python loopback'ini engeller ve bot
+imajı yerel servis çalıştırmaz. UDP/QUIC özel hedefler için yalnızca host
+güvenlik duvarıyla, Python soket kancasıyla değil, kapsanır.
 
 ## Kullanım
 
@@ -310,9 +406,14 @@ kontrol eder):
 pip install -r requirements.txt
 $env:PYTHONPATH="." ; python tests/smoke_test.py    # PowerShell
 PYTHONPATH=. python tests/smoke_test.py             # bash
+
+python -m unittest tests.test_netguard -v           # SSRF/connect regresyon testleri
 ```
 
-Test kendi verisini `.tmp/` altında oluşturur ve Telegram'a gerçek istek atmaz.
+Duman testi kendi verisini `.tmp/` altında oluşturur ve Telegram'a gerçek istek
+atmaz. Netguard testleri yalnızca yerel soketler kullanır (loopback izin listesi,
+yönlendirme, DNS rebinding, fail-closed DNS ve gallery-dl alt süreç
+önyüklemesi).
 
 ## Sorun Giderme
 
@@ -322,6 +423,8 @@ Test kendi verisini `.tmp/` altında oluşturur ve Telegram'a gerçek istek atma
 | `HTTP Error 403` / `429` | Çerezleri yenile, birkaç dakika bekle, VPS IP'si engellenmiş olabilir |
 | `Sign in to confirm you're not a bot` (YouTube) | Çerez ekle veya `PROXY_URL` tanımla |
 | `ffmpeg bulunamadı` | Docker imajında var; yerelde `apt install ffmpeg` / `winget install Gyan.FFmpeg` |
+| İndirme `güvenlik politikası bu hedefi engelledi` hatası veriyor | Hedef özel/metadata adres, DNS başarısız veya `PROXY_URL` var ama `NETGUARD_ALLOW_PROXY=1` değil (proxy atlanır; doğrudan bağlantı başarısız olabilir); `docker compose logs -f bot` kontrol et |
+| İndirmeler yalnızca firewall kapatınca çalışıyor | `deploy/ssrf-firewall.nft` kurallarını yeniden uygula; botun hâlâ `172.28.240.3` olduğunu ve yerel API izin kuralının eşleştiğini doğrula |
 | İndirme çalışmıyor, başka site çalışıyor | `docker compose restart bot` (açılışta yt-dlp güncellenir) veya `docker compose build --no-cache` |
 | Instagram fotoğrafı inmiyor | `gallery-dl` kurulu mu? (`GALLERY_ENABLED=1`); özel gönderiler için `cookies.txt` gerekir |
 | `Request Entity Too Large` | 50 MB limiti; daha düşük kalite seç veya yerel Bot API kur |
