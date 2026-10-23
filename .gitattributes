@@ -1,2 +1,4 @@
 # Shell betikleri Linux konteynerinde CALISACAK; CRLF shebang'i bozar.
 *.sh text eol=lf
+# nftables dosyasi Linux'ta `nft -f` ile okunur.
+*.nft text eol=lf

@@ -13,8 +13,19 @@ services:
       TZ: Europe/Istanbul
     volumes:
       - ./data:/data
+    # Sabit adres, deploy/ssrf-firewall.nft icindeki host kurallari icin
+    # gereklidir. Alt agi degistirirseniz firewall dosyasini da guncelleyin.
+    networks:
+      ssrf:
+        ipv4_address: 172.28.240.3
     # 50 MB ustu dosyalar icin yerel Bot API sunucusu kullaniyorsaniz acin:
     # extra_hosts:
     #   - "host.docker.internal:host-gateway"
     # environment:
     #   TELEGRAM_API_URL: http://host.docker.internal:8081
+
+networks:
+  ssrf:
+    ipam:
+      config:
+        - subnet: 172.28.240.0/24

@@ -1,0 +1,73 @@
+#!/usr/sbin/nft -f
+#
+# SSRF / metadata erisimini konteyner seviyesinde kesin olarak engeller.
+#
+# NEREDE CALISTIRILIR: Docker'in calistigi VPS'in kendisinde (konteyner
+# icinde DEGIL). Konteyner icindeki Python kancasi ffmpeg gibi ayri
+# surecleri kapsamaz; bu kurallar host uzerinden gecen trafigi kapsar.
+#
+#   sudo nft -f deploy/ssrf-firewall.nft
+#   sudo nft list table inet ssrf_egress
+#
+# Kalici hale getirmek icin dagitiminiza gore:
+#   sudo nft list ruleset > /etc/nftables.conf
+#   sudo systemctl enable --now nftables
+#
+# Bu dosya docker-compose.yml ile birlikte gelen sabit aga gore yazilmistir:
+#   bot      = 172.28.240.3
+#   bot-api  = 172.28.240.2:8081  (yalnizca yerel Bot API kullaniliyorsa)
+# Alt agi/adresleri degistirirseniz bu dosyayi da guncelleyin.
+
+table inet ssrf_egress {
+    chain forward {
+        type filter hook forward priority -10; policy accept;
+
+        # Donus trafigi ve kurulmus baglantilar serbest.
+        ct state established,related accept
+
+        # Yerel Telegram Bot API'ye yalnizca tek hedef ve port aciktir.
+        ip saddr 172.28.240.3 ip daddr 172.28.240.2 tcp dport 8081 accept
+
+        # Host'ta calisan yerel Bot API kullaniyorsaniz (host.docker.internal)
+        # asagidaki satiri acin ve NETGUARD_ALLOW=172.28.240.1:8081 ekleyin:
+        # ip saddr 172.28.240.3 ip daddr 172.28.240.1 tcp dport 8081 accept
+
+        # Ozel adreste bir proxy kullanacaksaniz (NETGUARD_ALLOW_PROXY=1)
+        # yalnizca proxy'nin host/port'una dar bir izin verin; ornek:
+        # ip saddr 172.28.240.3 ip daddr 172.28.240.1 tcp dport 3128 accept
+
+        # Ozel, loopback, link-local, CG-NAT, dokumantasyon, multicast ve
+        # rezerve IPv4 hedefleri. Cloud metadata (169.254.169.254,
+        # 100.100.100.200, 192.0.0.192) bu araliklarin icindedir.
+        ip saddr 172.28.240.3 ip daddr {
+            0.0.0.0/8,
+            10.0.0.0/8,
+            100.64.0.0/10,
+            127.0.0.0/8,
+            168.63.129.16/32,
+            169.254.0.0/16,
+            172.16.0.0/12,
+            192.0.0.0/24,
+            192.0.2.0/24,
+            192.88.99.0/24,
+            192.168.0.0/16,
+            198.18.0.0/15,
+            198.51.100.0/24,
+            203.0.113.0/24,
+            224.0.0.0/4,
+            240.0.0.0/4,
+            255.255.255.255/32
+        } drop
+
+        # IPv6 varsayilan olarak bu agda kapalidir. Acarsaniz bot konteynerinin
+        # IPv6 adresini yazarak asagidaki kurali ekleyin. 64:ff9b::/96 tumuyle
+        # kapatilir; IPv6-only NAT64 agi kullaniyorsaniz bunun yerine yalnizca
+        # ozel IPv4 gomen hedefleri ayri kurallarla engelleyin.
+        # ip6 saddr <BOT_IPV6> ip6 daddr {
+        #     ::/128, ::1/128, ::/96, ::ffff:0:0/96, 100::/64, 2001::/23,
+        #     2001:db8::/32, 2002::/16, 3fff::/20, 5f00::/16,
+        #     64:ff9b::/96, 64:ff9b:1::/48,
+        #     fc00::/7, fe80::/10, ff00::/8
+        # } drop
+    }
+}
