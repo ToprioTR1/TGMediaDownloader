@@ -913,19 +913,24 @@ async def main() -> int:
         old_dir = root / "dl-old-test"
         old_dir.mkdir(parents=True, exist_ok=True)
         (old_dir / "x.part").write_text("x", encoding="utf-8")
-        old_file = root / "old-test.part"
+        old_file = root / "dl-old-test.part"
         old_file.write_text("x", encoding="utf-8")
-        fresh_file = root / "fresh-test.tmp"
+        fresh_file = root / "dl-fresh-test.tmp"
         fresh_file.write_text("x", encoding="utf-8")
+        protected = root / "baska-uygulama.dat"
+        protected.write_text("x", encoding="utf-8")
         past = time.time() - 10 * 3600
         os.utime(old_dir, (past, past))
         os.utime(old_file, (past, past))
+        os.utime(protected, (past, past))
         removed = queue._cleanup_downloads(3600)
         check(removed >= 2, f"eski dosyalar temizlenmedi: {removed}")
         check(not old_dir.exists(), "eski klasor silinmedi")
         check(not old_file.exists(), "eski dosya silinmedi")
         check(fresh_file.exists(), "yeni dosya yanlislikla silindi")
+        check(protected.exists(), "bot disi dosya yanlislikla silindi")
         fresh_file.unlink(missing_ok=True)
+        protected.unlink(missing_ok=True)
         print("20) gecici dosya temizligi OK")
 
         # 21) kisisel ayarlar (/ayar)
@@ -1063,6 +1068,23 @@ async def main() -> int:
             "/cache temizle calismadi",
         )
         check((await db.cache_stats())["count"] == cache_stats["count"], "onbellek bozuldu")
+
+        mark = len(bot.calls)
+        await dp.feed_update(bot, msg_update("/cache tum", 42))
+        check(
+            any("silinsin mi" in t for t in bot.texts_since(mark)),
+            "tum onbellek icin onay istenmedi",
+        )
+        check(
+            (await db.cache_stats())["count"] == cache_stats["count"],
+            "/cache tum onay beklemeden sildi",
+        )
+
+        confirm_message = simple_message("onay", 9600).as_(bot)
+        await dp.feed_update(
+            bot, callback_update("cache|clear_yes", confirm_message)
+        )
+        check((await db.cache_stats())["count"] == 0, "onayli onbellek temizligi calismadi")
         print("23) onbellek yonetimi OK")
 
         # 24) kesif hatasinda da yeniden dene butonu
