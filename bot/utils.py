@@ -10,6 +10,8 @@ import logging
 import re
 from urllib.parse import urlparse
 
+from .netguard import is_public_ip
+
 log = logging.getLogger(__name__)
 
 DNS_LOOKUP_TIMEOUT = 3.0
@@ -101,13 +103,9 @@ def media_cache_key(url: str, preset: str) -> str:
 
 
 def _blocked_ip(value: str) -> bool:
-    try:
-        ip = ipaddress.ip_address(value)
-    except ValueError:
-        return False
-    # Yalnizca genel (internete acik) adreslere izin ver. Boylece ozel ag,
-    # loopback, link-local, CG-NAT, multicast ve rezerve araliklar kapanir.
-    return not ip.is_global or ip.is_multicast
+    # Ayni siniflandirma netguard'daki baglanti kancasiyla paylasilir; iki
+    # katmanin farkli adresleri guvenli saymasi onlenir.
+    return not is_public_ip(value)
 
 
 def is_blocked_host(url: str) -> bool:
@@ -144,8 +142,9 @@ async def is_blocked_url(url: str) -> bool:
     Yalnizca metindeki IP'yi kontrol etmek, genel gorunen bir alan adinin
     (or. localtest.me) yerel bir adrese cozulmesine izin verirdi. Bu yuzden
     ilk istekten once alan adi da cozulur ve donen tum adresler denetlenir.
-    DNS cozulemezse indiriciye devam etme sansi verilir; cozulen adreslerden
-    herhangi biri yerelse istek reddedilir.
+    DNS cozulemezse istek reddedilir: guvenlik denetimi basarisizken indiriciye
+    devam etme sansi verilmez. Asil sinir yine de netguard'in connect
+    kancasidir; buradaki kontrol kullaniciya erken ve anlasilir hata verir.
     """
     if is_blocked_host(url):
         return True
@@ -166,9 +165,13 @@ async def is_blocked_url(url: str) -> bool:
             asyncio.get_running_loop().getaddrinfo(host, None),
             timeout=DNS_LOOKUP_TIMEOUT,
         )
-    except (asyncio.TimeoutError, OSError) as exc:
-        log.debug("DNS denetimi yapilamadi (%s): %s", host, exc)
-        return False
+    except (asyncio.TimeoutError, OSError, ValueError) as exc:
+        log.warning("DNS denetimi yapilamadi, istek reddedildi (%s): %s", host, exc)
+        return True
+
+    if not infos:
+        log.warning("DNS sonucu bos, istek reddedildi: %s", host)
+        return True
 
     for *_, sockaddr in infos:
         address = str(sockaddr[0]).split("%", 1)[0]

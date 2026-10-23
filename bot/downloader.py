@@ -15,6 +15,7 @@ from typing import Any
 
 import yt_dlp
 
+from . import netguard
 from .config import Settings
 from .utils import platform_name
 
@@ -46,6 +47,8 @@ class MediaInfo:
 
 def _friendly_error(raw: str) -> str:
     text = raw.lower()
+    if "güvenlik politikası" in text or "blocked destination" in text:
+        return "Bu hedef güvenlik politikası nedeniyle engellendi."
     if any(k in text for k in ("login", "sign in", "cookies", "authentication", "private")):
         return (
             "Bu içerik için giriş gerekiyor. Instagram/TikTok gibi platformlarda "
@@ -75,6 +78,9 @@ def _friendly_error(raw: str) -> str:
 class Downloader:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
+        # İndirme ağını süreç genelinde denetle. Ana giriş noktası da kurar;
+        # buradaki çağrı kütüphaneyi doğrudan kullanan yolları da kapsar.
+        netguard.ensure_for_settings(settings)
 
     # ------------------------------------------------------------------ ortak
 
@@ -90,6 +96,10 @@ class Downloader:
             "extractor_retries": 2,
             "socket_timeout": 25,
             "concurrent_fragment_downloads": 4,
+            # HLS varsayılan olarak ffmpeg indiricisine düşebilir; ffmpeg
+            # Python socket kancasını atlar. Yerel HlsFD kullanarak tüm
+            # segment isteklerini netguard denetiminde tut.
+            "hls_prefer_native": True,
             "restrictfilenames": True,
             "windowsfilenames": True,
             "cachedir": False,
@@ -98,8 +108,15 @@ class Downloader:
             opts["cookiefile"] = str(self._settings.cookies_file)
         elif self._settings.cookies_file:
             log.warning("COOKIES_FILE bulunamadi: %s", self._settings.cookies_file)
-        if self._settings.proxy:
-            opts["proxy"] = self._settings.proxy
+        if netguard.proxy_allowed():
+            if self._settings.proxy:
+                opts["proxy"] = self._settings.proxy
+        else:
+            # yt-dlp'de boş proxy ``__noproxy__`` anlamına gelir ve
+            # HTTP(S)_PROXY/ALL_PROXY ortam değişkenlerini de devre dışı
+            # bırakır. Proxy arkasındaki hedefler soket katmanında
+            # doğrulanamadığı için varsayılan davranış budur.
+            opts["proxy"] = ""
         return opts
 
     # ------------------------------------------------------------------ kesif

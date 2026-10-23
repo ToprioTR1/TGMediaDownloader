@@ -14,6 +14,7 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand
 
+from . import netguard
 from .config import Settings
 from .database import Database
 from .downloader import Downloader
@@ -51,6 +52,11 @@ async def run() -> None:
     logging.getLogger("aiogram.event").setLevel(logging.WARNING)
 
     settings.download_dir.mkdir(parents=True, exist_ok=True)
+
+    # Telegram API (yerel Bot API dahil) dışındaki tüm TCP hedefleri indirme
+    # korumasından geçer. Yerel Bot API adresi otomatik olarak izin listesine
+    # eklenir; ayrıntılar için bot/netguard.py.
+    netguard.ensure_for_settings(settings)
 
     db = Database(settings.db_path)
     await db.connect()

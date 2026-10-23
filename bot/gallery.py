@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from . import netguard
 from .config import Settings
 
 log = logging.getLogger(__name__)
@@ -39,6 +40,9 @@ def gallery_installed() -> bool:
 class GalleryDownloader:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
+        # gallery-dl ayrı bir Python süreci çalıştırır; koruma alt sürece
+        # sitecustomize ile taşınır. Ana süreçteki kanca da kurulu olsun.
+        netguard.ensure_for_settings(settings)
         self.available = settings.gallery_enabled and gallery_installed()
         if settings.gallery_enabled and not self.available:
             log.warning("gallery-dl kurulu degil; fotograf/carousel destegi kapali.")
@@ -56,12 +60,19 @@ class GalleryDownloader:
         return [sys.executable, "-m", "gallery_dl"]
 
     def _common_args(self) -> list[str]:
-        args: list[str] = []
+        # Kullanıcı/ortam yapılandırmasının harici indirici veya --exec gibi
+        # ağ kancasını atlayan seçenekler eklemesini engelle.
+        args: list[str] = ["--config-ignore"]
         cookies = self._settings.cookies_file
         if cookies and cookies.exists():
             args += ["--cookies", str(cookies)]
-        if self._settings.proxy:
-            args += ["--proxy", self._settings.proxy]
+        if netguard.proxy_allowed():
+            if self._settings.proxy:
+                args += ["--proxy", self._settings.proxy]
+        else:
+            # Alt süreç ortamındaki proxy değişkenleri ayrıca temizlenir;
+            # bu seçenek gallery-dl'nin kendi proxy-env davranışını kapatır.
+            args += ["-o", "proxy-env=false"]
         return args
 
     def _run(self, cmd: list[str], timeout: int) -> subprocess.CompletedProcess[str]:
@@ -73,6 +84,7 @@ class GalleryDownloader:
                 encoding="utf-8",
                 errors="replace",
                 timeout=timeout,
+                env=netguard.child_env(),
             )
         except subprocess.TimeoutExpired as exc:
             raise GalleryError("Medya listesi alınamadı (zaman aşımı).") from exc
