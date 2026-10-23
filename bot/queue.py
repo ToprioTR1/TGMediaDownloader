@@ -782,10 +782,16 @@ class JobQueue:
         if not root.exists():
             return 0
 
+        # Bu fonksiyon thread'de calisir; aktif klasorlerin anlik kopyasini al.
+        tracked = set(self._tmpdirs)
         now = time.time()
         removed = 0
         for entry in root.iterdir():
-            if entry in self._tmpdirs:
+            # DOWNLOAD_DIR baska dosyalarla paylasilabilir (or. /data). Yalnizca
+            # botun olusturdugu dl-* gecici girdilerine dokun.
+            if not entry.name.startswith("dl-"):
+                continue
+            if entry in tracked:
                 continue
             try:
                 if now - entry.stat().st_mtime < max_age_sec:
