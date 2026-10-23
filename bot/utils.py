@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import html
 import ipaddress
+import logging
 import re
 from urllib.parse import urlparse
 
+log = logging.getLogger(__name__)
+
+DNS_LOOKUP_TIMEOUT = 3.0
+BLOCKED_HOST_SUFFIXES = (".local", ".internal", ".localhost")
 URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 QUALITY_RE = re.compile(r"(?<![\d.])(\d{3,4})(?:\s*[pP])?(?![\d.])")
 K_QUALITY = {"8k": 4320, "4k": 2160, "2k": 1440}
@@ -93,21 +99,73 @@ def media_cache_key(url: str, preset: str) -> str:
     return hashlib.sha256(f"{url}|{preset}".encode()).hexdigest()[:32]
 
 
+def _blocked_ip(value: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    # Yalnizca genel (internete acik) adreslere izin ver. Boylece ozel ag,
+    # loopback, link-local, CG-NAT, multicast ve rezerve araliklar kapanir.
+    return not ip.is_global or ip.is_multicast
+
+
 def is_blocked_host(url: str) -> bool:
     """Yerel ag / localhost adreslerine istek atilmasini engeller."""
     try:
-        host = (urlparse(url).hostname or "").lower()
+        host = (urlparse(url).hostname or "").lower().rstrip(".")
     except ValueError:
         return True
     if not host:
         return True
-    if host in {"localhost", "localhost.localdomain", "0.0.0.0", "::1"}:
+    if host in {"localhost", "localhost.localdomain"}:
+        return True
+    if host.endswith(BLOCKED_HOST_SUFFIXES):
         return True
     try:
         ip = ipaddress.ip_address(host)
     except ValueError:
-        return host.endswith(".local") or host.endswith(".internal")
-    return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+        return False
+    return _blocked_ip(str(ip))
+
+
+async def is_blocked_url(url: str) -> bool:
+    """URL'yi ve DNS sonucunu denetler.
+
+    Yalnizca metindeki IP'yi kontrol etmek, genel gorunen bir alan adinin
+    (or. localtest.me) yerel bir adrese cozulmesine izin verirdi. Bu yuzden
+    ilk istekten once alan adi da cozulur ve donen tum adresler denetlenir.
+    DNS cozulemezse indiriciye devam etme sansi verilir; cozulen adreslerden
+    herhangi biri yerelse istek reddedilir.
+    """
+    if is_blocked_host(url):
+        return True
+    try:
+        host = (urlparse(url).hostname or "").lower().rstrip(".")
+    except ValueError:
+        return True
+    if not host:
+        return True
+    try:
+        ipaddress.ip_address(host)
+        return False  # Genel bir IP; is_blocked_host zaten temiz dedi.
+    except ValueError:
+        pass
+
+    try:
+        infos = await asyncio.wait_for(
+            asyncio.get_running_loop().getaddrinfo(host, None),
+            timeout=DNS_LOOKUP_TIMEOUT,
+        )
+    except (asyncio.TimeoutError, OSError) as exc:
+        log.debug("DNS denetimi yapilamadi (%s): %s", host, exc)
+        return False
+
+    for *_, sockaddr in infos:
+        address = str(sockaddr[0]).split("%", 1)[0]
+        if _blocked_ip(address):
+            log.warning("Yerel aga cozulen baglanti reddedildi: %s -> %s", host, address)
+            return True
+    return False
 
 
 def platform_name(extractor: str | None) -> str:

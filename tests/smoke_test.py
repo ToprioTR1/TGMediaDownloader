@@ -19,6 +19,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
 os.environ["BOT_TOKEN"] = "123456:TESTTESTTESTTESTTESTTESTTESTTESTTES"
@@ -67,7 +68,12 @@ from bot.handlers.download import (  # noqa: E402
 from bot.middlewares import UserMiddleware  # noqa: E402
 from bot.queue import Job, JobQueue  # noqa: E402
 from bot.status import StatusHub  # noqa: E402
-from bot.utils import nearest_height, parse_quality, wants_document  # noqa: E402
+from bot.utils import (  # noqa: E402
+    is_blocked_url,
+    nearest_height,
+    parse_quality,
+    wants_document,
+)
 
 URL = "https://www.tiktok.com/@tiktok/video/7106594312292453675"
 ADMIN = User(id=42, is_bot=False, first_name="Ali", username="alitoprak")
@@ -370,6 +376,28 @@ async def main() -> int:
             not wants_document("https://example.com/fl/123"),
             "URL icindeki fl dosya ipucu sayildi",
         )
+        check(
+            "nocheckcertificate" not in downloader._base_opts(),
+            "TLS sertifika dogrulamasi kapatilmis",
+        )
+        check(
+            await is_blocked_url("http://127.0.0.1:8080/"),
+            "loopback adresi engellenmedi",
+        )
+        check(
+            await is_blocked_url("http://169.254.169.254/latest/meta-data"),
+            "link-local adresi engellenmedi",
+        )
+        check(
+            not await is_blocked_url("https://1.1.1.1/video"),
+            "genel IP yanlislikla engellendi",
+        )
+        fake_dns = [(2, 1, 6, "", ("127.0.0.1", 0))]
+        with patch("socket.getaddrinfo", return_value=fake_dns):
+            check(
+                await is_blocked_url("http://rebind.example/video"),
+                "yerel adrese cozulen alan adi engellenmedi",
+            )
         check(settings.default_height_for("Instagram") == 1280, "instagram varsayilani")
         check(settings.default_height_for("TikTok") == 1012, "tiktok varsayilani")
         check(settings.default_height_for("YouTube") == 720, "youtube varsayilani")
@@ -511,6 +539,14 @@ async def main() -> int:
         check(
             _gallery_url("https://www.instagram.com/p/abc/"),
             "instagram adresi taninmadi",
+        )
+        check(
+            not _gallery_url("https://instagram.com.evil.example/p/abc/"),
+            "instagram benzeri zararli alan adi kabul edildi",
+        )
+        check(
+            not _gallery_url("https://evil.example/?instagram.com/p/abc/"),
+            "URL parametresindeki instagram metni kabul edildi",
         )
         check(
             _gallery_title([{"description": "ilk satir\nikinci"}]) == "ilk satir",

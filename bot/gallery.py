@@ -30,7 +30,10 @@ class GalleryError(Exception):
 
 
 def gallery_installed() -> bool:
-    return shutil.which("gallery-dl") is not None or importlib.util.find_spec("gallery_dl") is not None
+    return (
+        importlib.util.find_spec("gallery_dl") is not None
+        or shutil.which("gallery-dl") is not None
+    )
 
 
 class GalleryDownloader:
@@ -43,6 +46,13 @@ class GalleryDownloader:
     # ------------------------------------------------------------------ ortak
 
     def _base_cmd(self) -> list[str]:
+        # Once ayni Python ortamindaki modulu kullan. Yalnizca baska bir Python
+        # ortamina kurulmus gallery-dl calistirilabilirse onu cagir.
+        if importlib.util.find_spec("gallery_dl") is not None:
+            return [sys.executable, "-m", "gallery_dl"]
+        executable = shutil.which("gallery-dl")
+        if executable:
+            return [executable]
         return [sys.executable, "-m", "gallery_dl"]
 
     def _common_args(self) -> list[str]:

@@ -93,7 +93,6 @@ class Downloader:
             "restrictfilenames": True,
             "windowsfilenames": True,
             "cachedir": False,
-            "nocheckcertificate": True,
         }
         if self._settings.cookies_file and self._settings.cookies_file.exists():
             opts["cookiefile"] = str(self._settings.cookies_file)
@@ -182,6 +181,11 @@ class Downloader:
         ordered = sorted(heights, reverse=True)
         if self._settings.max_height:
             ordered = [h for h in ordered if h <= self._settings.max_height]
+            if heights and not ordered:
+                raise DownloadError(
+                    f"Bu videoda {self._settings.max_height}p ve altinda bir kalite "
+                    "bulunamadi (MAX_HEIGHT)."
+                )
             estimated_sizes = {
                 h: size for h, size in estimated_sizes.items() if h in ordered
             }

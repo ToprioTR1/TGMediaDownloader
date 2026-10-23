@@ -15,6 +15,7 @@ import asyncio
 import logging
 import time
 import uuid
+from urllib.parse import urlparse
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
@@ -36,7 +37,7 @@ from ..utils import (
     extract_urls,
     human_duration,
     human_size,
-    is_blocked_host,
+    is_blocked_url,
     parse_quality,
     wants_audio,
     wants_document,
@@ -57,8 +58,11 @@ class SizeLimitError(Exception):
 
 
 def _gallery_url(url: str) -> bool:
-    lowered = url.lower()
-    return any(host in lowered for host in GALLERY_HOSTS)
+    try:
+        host = (urlparse(url).hostname or "").lower().rstrip(".")
+    except ValueError:
+        return False
+    return any(host == domain or host.endswith(f".{domain}") for domain in GALLERY_HOSTS)
 
 
 def _needs_gallery(info: MediaInfo) -> bool:
@@ -312,7 +316,7 @@ async def _process_text(
         else:
             status = await queue.send_status(chat_id, "🔎 Bağlantı inceleniyor…")
 
-        if is_blocked_host(url):
+        if await is_blocked_url(url):
             await queue.edit_status(
                 chat_id,
                 status.message_id,
