@@ -28,8 +28,8 @@ Built with Python 3.12 + [aiogram 3](https://github.com/aiogram/aiogram) +
 - 🔘 `🔗 Source` · `🎵 Get audio` buttons under videos
 - 📝 Links in media captions and in replied-to messages are processed too
 - 🚦 Only URLs matched by a yt-dlp site extractor (or a site's official
-  short-link host) are processed; generic web pages are rejected locally
-  without a network probe
+  short-link host) are processed; generic web pages are ignored locally
+  without a network probe or reply
 - 🖼 Instagram photo / carousel posts (via gallery-dl, sent as an album;
   `dosya` sends them as documents)
 - 🚫 SSRF protection on every Python TCP `connect`: redirects, DNS rebinding,

@@ -257,6 +257,9 @@ async def on_text(
     urls = extract_urls(text)
     if not urls:
         return
+    if not any(_supports_url(downloader, gallery, url) for url in urls):
+        # Desteklenmeyen linkler sessizce yok sayilir; probe veya mesaj yok.
+        return
 
     user_id = message.from_user.id
     now = time.monotonic()
@@ -305,19 +308,12 @@ async def _process_text(
 ) -> None:
     urls = [only_url] if only_url else extract_urls(text)
     supported_urls = [url for url in urls if _supports_url(downloader, gallery, url)]
-    unsupported = [url for url in urls if url not in supported_urls]
-    if unsupported:
-        if existing_status is not None and not supported_urls:
-            await queue.edit_status(
-                chat_id,
-                existing_status.message_id,
-                f"❌ {UNSUPPORTED_URL_TEXT}",
-                wait=True,
-            )
-            await queue.forget_status(chat_id, existing_status.message_id)
-        else:
-            await bot.send_message(chat_id, f"❌ {UNSUPPORTED_URL_TEXT}")
     if not supported_urls:
+        # Desteklenmeyen linkler icin mesaj birakma. Yeniden deneme
+        # dugmesinden gelindiyse eski durum mesajini de temizle.
+        if existing_status is not None:
+            await queue.delete_status(chat_id, existing_status.message_id)
+            await queue.forget_status(chat_id, existing_status.message_id)
         return
 
     error = await _limit_error(user_id, db, settings, queue)
@@ -386,6 +382,11 @@ async def _process_text(
             if _gallery_url(url):
                 gallery_items = await _probe_gallery(gallery, url)
             if not gallery_items:
+                if str(exc) == UNSUPPORTED_URL_TEXT:
+                    # Yerel kontrolu gecmis olsa da yt-dlp URL'yi tanimadi;
+                    # desteklenmeyen linklerde oldugu gibi sessizce bitir.
+                    await queue.delete_status(chat_id, status.message_id)
+                    continue
                 await queue.edit_status(
                     chat_id,
                     status.message_id,

@@ -24,7 +24,7 @@ ile yazıldı, Docker ile çalışacak şekilde hazırlandı.
 - 📝 Medya açıklamasındaki (caption) ve yanıtlanan mesajdaki bağlantılar da işlenir
 - 🚦 Yalnızca yt-dlp site eşleştiricisinin tanıdığı URL'ler (veya sitelerin
   resmi kısa link alan adları) işlenir; normal web sayfaları ağ isteği
-  yapılmadan reddedilir
+  yapılmadan ve mesaj yazılmadan yok sayılır
 - 🖼 Instagram fotoğraf / carousel gönderileri (gallery-dl ile, albüm olarak;
   `dosya` yazılırsa belge olarak)
 - 🚫 Her Python TCP `connect` anında SSRF koruması: yönlendirmeler, DNS

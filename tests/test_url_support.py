@@ -21,7 +21,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from bot.downloader import ytdlp_supports_url  # noqa: E402
-from bot.handlers.download import _process_text  # noqa: E402
+from bot.handlers.download import _process_text, on_text  # noqa: E402
 
 
 class UrlSupportTests(unittest.TestCase):
@@ -86,9 +86,20 @@ class _FakeGallery:
     available = False
 
 
+class _FakeMessage:
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.caption = None
+        self.reply_to_message = None
+        self.from_user = SimpleNamespace(id=42, is_bot=False)
+        self.chat = SimpleNamespace(id=123)
+        self.bot = _FakeBot()
+
+
 class _FakeQueue:
     def __init__(self) -> None:
         self.edited: list[tuple[int, int, str]] = []
+        self.deleted: list[tuple[int, int]] = []
         self.forgotten: list[tuple[int, int]] = []
 
     async def edit_status(
@@ -96,12 +107,31 @@ class _FakeQueue:
     ) -> None:
         self.edited.append((chat_id, message_id, text))
 
+    async def delete_status(self, chat_id: int, message_id: int) -> None:
+        self.deleted.append((chat_id, message_id))
+
     async def forget_status(self, chat_id: int, message_id: int) -> None:
         self.forgotten.append((chat_id, message_id))
 
 
 class UnsupportedUrlHandlerTests(unittest.IsolatedAsyncioTestCase):
-    async def test_unsupported_url_gets_message_without_probe(self) -> None:
+    async def test_on_text_ignores_unsupported_url_silently(self) -> None:
+        message = _FakeMessage("https://example.com/sayfa")
+        downloader = _FakeDownloader()
+
+        await on_text(  # type: ignore[arg-type]
+            message,
+            settings=SimpleNamespace(cooldown_sec=0),  # type: ignore[arg-type]
+            db=None,  # type: ignore[arg-type]
+            downloader=downloader,  # type: ignore[arg-type]
+            gallery=_FakeGallery(),  # type: ignore[arg-type]
+            queue=None,  # type: ignore[arg-type]
+        )
+
+        self.assertEqual(downloader.probed, [])
+        self.assertEqual(message.bot.sent, [])
+
+    async def test_unsupported_url_is_ignored_without_probe(self) -> None:
         bot = _FakeBot()
         downloader = _FakeDownloader()
 
@@ -118,10 +148,9 @@ class UnsupportedUrlHandlerTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(downloader.probed, [])
-        self.assertEqual(len(bot.sent), 1)
-        self.assertIn("desteklenmiyor", bot.sent[0][1].lower())
+        self.assertEqual(bot.sent, [])
 
-    async def test_unsupported_retry_edits_existing_status(self) -> None:
+    async def test_unsupported_retry_deletes_existing_status(self) -> None:
         bot = _FakeBot()
         queue = _FakeQueue()
         existing = SimpleNamespace(message_id=77)
@@ -141,6 +170,6 @@ class UnsupportedUrlHandlerTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(bot.sent, [])
-        self.assertEqual(len(queue.edited), 1)
-        self.assertIn("desteklenmiyor", queue.edited[0][2].lower())
+        self.assertEqual(queue.edited, [])
+        self.assertEqual(queue.deleted, [(123, 77)])
         self.assertEqual(queue.forgotten, [(123, 77)])
