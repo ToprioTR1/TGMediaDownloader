@@ -341,10 +341,12 @@ Telegram.
 
 ## Notes
 
-- Videos are kept in a temporary directory and deleted after sending; they do
-  not accumulate on the server. Leftover files older than 6 hours are removed by
-  a janitor every 30 minutes, and tracked temporary directories are removed on
-  graceful shutdown.
+- Videos are kept in a `dl-*` temporary directory and deleted after sending; they
+  do not accumulate on the server. Leftover `dl-*` entries older than 6 hours are
+  removed by a janitor every 30 minutes; other files in `DOWNLOAD_DIR` are left
+  untouched. Tracked temporary directories are removed on graceful shutdown.
+- The daily download limit is enforced both before probing and when a job enters
+  the queue, and it resets at local midnight.
 - All stages are shown by editing one status message, not by sending a new
   message for each stage. Updates are merged so only the latest pending state is
   sent, identical text is skipped, and edits are serialized per chat with a
@@ -362,7 +364,8 @@ Telegram.
 - The `file_id` cache is stored in SQLite (`CACHE_DAYS`, 30 days by default).
   If Telegram rejects a file, the cache entry is removed automatically and the
   media is downloaded again. Old entries are pruned at startup, and admins can
-  inspect or clear the cache with `/cache`.
+  inspect, prune, or clear the cache with `/cache`; clearing all entries requires
+  explicit confirmation.
 - Live streams are not supported.
 - Only use this bot for content you have the right to download and in
   compliance with the platforms' terms of service. You are responsible for how

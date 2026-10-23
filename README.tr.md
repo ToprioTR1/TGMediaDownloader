@@ -329,9 +329,12 @@ Test kendi verisini `.tmp/` altında oluşturur ve Telegram'a gerçek istek atma
 
 ## Notlar
 
-- Videolar geçici klasörde tutulur ve gönderimden sonra silinir; sunucuda birikmez.
-  6 saatten eski artık dosyalar 30 dakikada bir çalışan temizlik göreviyle,
-  takip edilen geçici klasörler ise kapanışta silinir.
+- Videolar `dl-*` geçici klasöründe tutulur ve gönderimden sonra silinir;
+  sunucuda birikmez. 6 saatten eski artık `dl-*` girdileri 30 dakikada bir çalışan
+  temizlik göreviyle silinir; `DOWNLOAD_DIR` içindeki diğer dosyalara dokunulmaz.
+  Takip edilen geçici klasörler kapanışta da temizlenir.
+- Günlük indirme limiti hem bağlantı incelenmeden önce hem de iş kuyruğa girerken
+  denetlenir ve yerel gece yarısında sıfırlanır.
 - Tüm aşamalar tek bir durum mesajı düzenlenerek gösterilir; her aşama için yeni
   mesaj gönderilmez. Güncellemeler birleştirilir, yalnızca en son bekleyen durum
   yazılır, aynı metin tekrar gönderilmez ve aynı sohbetteki düzenlemeler minimum
@@ -348,8 +351,8 @@ Test kendi verisini `.tmp/` altında oluşturur ve Telegram'a gerçek istek atma
   gönderilerde kalite seçimi için yt-dlp kullanılır.
 - `file_id` önbelleği SQLite'ta tutulur (`CACHE_DAYS`, varsayılan 30 gün).
   Telegram dosyayı reddederse önbellek otomatik temizlenir ve yeniden indirilir.
-  Eski kayıtlar açılışta budanır; adminler `/cache` ile önbelleği inceleyebilir
-  veya temizleyebilir.
+  Eski kayıtlar açılışta budanır; adminler `/cache` ile önbelleği inceleyebilir,
+  budayabilir veya temizleyebilir. Tüm kayıtları silmek açık onay gerektirir.
 - Canlı yayınlar desteklenmez.
 - Bu botu yalnızca indirmeye hakkınız olan içerikler ve platformların kullanım
   koşullarına uygun şekilde kullanın. Sorumluluk kullanıcıya aittir.

@@ -3,6 +3,7 @@ services:
     build: .
     container_name: video-dl-bot
     restart: unless-stopped
+    stop_grace_period: 30s
     env_file:
       - .env
     environment:
