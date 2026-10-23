@@ -98,6 +98,14 @@ def _cache_confirm_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def _cache_clear_prompt(stats: dict[str, Any]) -> str:
+    return (
+        "⚠️ <b>Tüm önbellek silinsin mi?</b>\n\n"
+        f"{stats['count']} kayıt silinecek. Bu işlem geri alınamaz.\n"
+        "Kullanıcılar aynı medyayı tekrar isterse yeniden indirilir."
+    )
+
+
 @router.message(Command("admin"), IsAdmin())
 async def cmd_admin(message: Message) -> None:
     await message.answer(
@@ -128,8 +136,11 @@ async def cmd_cache(message: Message, db: Database) -> None:
                         "Kullanım: <code>/cache temizle 7</code> (gün sayısı)"
                     )
                     return
-                if days < 0:
-                    await message.answer("Gün sayısı negatif olamaz.")
+                if days < 1:
+                    await message.answer(
+                        "Gün sayısı en az 1 olmalı. Tümünü silmek için "
+                        "<code>/cache tum</code> kullanın; onay istenir."
+                    )
                     return
             removed = await db.cache_cleanup(days)
             await message.answer(
@@ -139,11 +150,9 @@ async def cmd_cache(message: Message, db: Database) -> None:
             )
             return
         if action in {"tum", "tüm", "clear"}:
-            removed = await db.cache_clear()
             await message.answer(
-                f"🗑 <b>{removed}</b> önbellek kaydı silindi.\n\n"
-                + _cache_text(await db.cache_stats()),
-                reply_markup=_cache_keyboard(),
+                _cache_clear_prompt(await db.cache_stats()),
+                reply_markup=_cache_confirm_keyboard(),
             )
             return
 
@@ -177,7 +186,7 @@ async def cmd_users(message: Message, db: Database) -> None:
 
 
 @router.message(Command("broadcast"), IsAdmin())
-async def cmd_broadcast(message: Message, db: Database) -> None:
+async def cmd_broadcast(message: Message, db: Database, queue: JobQueue) -> None:
     text = (message.text or "").partition(" ")[2].strip()
     if not text:
         await message.answer("Kullanım: <code>/broadcast mesaj metni</code>")
@@ -230,16 +239,22 @@ async def cmd_broadcast(message: Message, db: Database) -> None:
                 break
         await asyncio.sleep(0.05)
         if index % 25 == 0:
-            with suppress(TelegramBadRequest):
-                await status.edit_text(
-                    f"📣 Gönderiliyor… {index}/{len(targets)} "
-                    f"(✅ {sent} • ❌ {failed})"
-                )
+            # Durum guncellemeleri de flood limitine takilmasin: ortak hub
+            # guncellemeleri birlestirir ve RetryAfter'i bekler.
+            await queue.edit_status(
+                status.chat.id,
+                status.message_id,
+                f"📣 Gönderiliyor… {index}/{len(targets)} "
+                f"(✅ {sent} • ❌ {failed})",
+            )
 
-    with suppress(TelegramBadRequest):
-        await status.edit_text(
-            f"📣 Yayın tamamlandı.\n✅ Gönderildi: {sent}\n❌ Başarısız: {failed}"
-        )
+    await queue.edit_status(
+        status.chat.id,
+        status.message_id,
+        f"📣 Yayın tamamlandı.\n✅ Gönderildi: {sent}\n❌ Başarısız: {failed}",
+        wait=True,
+    )
+    await queue.forget_status(status.chat.id, status.message_id)
 
 
 def _username_arg(message: Message) -> str | None:
@@ -397,9 +412,12 @@ async def cb_cache(callback: CallbackQuery, db: Database) -> None:
 
     if action == "clean" and len(parts) == 3:
         try:
-            days = max(0, int(parts[2]))
+            days = int(parts[2])
         except ValueError:
             await callback.answer("Geçersiz gün sayısı.", show_alert=True)
+            return
+        if days < 1:
+            await callback.answer("Gün sayısı en az 1 olmalı.", show_alert=True)
             return
         removed = await db.cache_cleanup(days)
         await callback.answer(f"🧹 {removed} kayıt silindi.")
@@ -418,9 +436,7 @@ async def cb_cache(callback: CallbackQuery, db: Database) -> None:
             stats = await db.cache_stats()
             with suppress(TelegramBadRequest):
                 await callback.message.edit_text(
-                    "⚠️ <b>Tüm önbellek silinsin mi?</b>\n\n"
-                    f"{stats['count']} kayıt silinecek. Bu işlem geri alınamaz.\n"
-                    "Kullanıcılar aynı medyayı tekrar isterse yeniden indirilir.",
+                    _cache_clear_prompt(stats),
                     reply_markup=_cache_confirm_keyboard(),
                 )
         return
