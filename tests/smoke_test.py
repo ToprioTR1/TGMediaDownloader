@@ -19,6 +19,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -54,7 +55,7 @@ from aiogram.types import (  # noqa: E402
 from bot.config import Settings  # noqa: E402
 from bot.database import Database  # noqa: E402
 from bot.downloader import DownloadError, Downloader, MediaInfo  # noqa: E402
-from bot.gallery import GalleryDownloader  # noqa: E402
+from bot.gallery import GalleryDownloader, GalleryError  # noqa: E402
 from bot.handlers import admin, download, start  # noqa: E402
 from bot.handlers.download import (  # noqa: E402
     SizeLimitError,
@@ -564,6 +565,29 @@ async def main() -> int:
             webpage_url="u",
         )
         check(_needs_gallery(photo_info), "fotograf gonderisi taninmadi")
+
+        # Basarisiz gallery-dl cagrisi yarim dosyayi basarili saymamali.
+        failure_dir = Path(".tmp/smoke/gallery-failure")
+        shutil.rmtree(failure_dir, ignore_errors=True)
+        failure_dir.mkdir(parents=True)
+        (failure_dir / "partial.jpg").write_bytes(b"partial")
+        with (
+            patch.object(gallery, "available", True),
+            patch.object(
+                gallery,
+                "_run",
+                return_value=SimpleNamespace(
+                    returncode=1, stdout="", stderr="network error"
+                ),
+            ),
+        ):
+            try:
+                gallery.download("https://example.com/post", failure_dir)
+            except GalleryError:
+                pass
+            else:
+                check(False, "basarisiz gallery-dl ciktisi basarili sayildi")
+        shutil.rmtree(failure_dir, ignore_errors=True)
         print("9) galeri tespiti OK")
 
         # 10) galeri indirme ve gonderim (gercek gallery-dl)

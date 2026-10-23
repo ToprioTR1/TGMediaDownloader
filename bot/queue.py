@@ -110,7 +110,7 @@ class JobQueue:
         self._submit_lock = asyncio.Lock()
         self._tasks: list[asyncio.Task[None]] = []
         self._pending: Counter[int] = Counter()
-        self._jobs: dict[tuple[int, str, str], Job] = {}
+        self._jobs: dict[tuple[int, int, str, str], Job] = {}
         self._retry_jobs: dict[str, Job] = {}
         self._tmpdirs: set[Path] = set()
         self._janitor: asyncio.Task[None] | None = None
@@ -451,7 +451,12 @@ class JobQueue:
             await self._record(job, "unknown", size)
             await self._delivery_uncertain(job)
         except TelegramForbiddenError:
+            # Kullanici botu engellemis veya bot sohbetten cikarilmis. Durum
+            # mesaji duzenlenemez; yine de kaydi yaz ve bellek kartini bırak.
             log.warning("Kullanici botu engellemis: %s", job.user_id)
+            with contextlib.suppress(Exception):
+                await self._record(job, "error")
+            await self.forget_status(job.chat_id, job.status_message_id)
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001
@@ -511,6 +516,9 @@ class JobQueue:
             await self._delivery_uncertain(job)
         except TelegramForbiddenError:
             log.warning("Kullanici botu engellemis: %s", job.user_id)
+            with contextlib.suppress(Exception):
+                await self._record(job, "error", preset="gallery")
+            await self.forget_status(job.chat_id, job.status_message_id)
         except Exception:  # noqa: BLE001
             log.exception("Galeri hatasi: %s", job.url)
             await self._record(job, "error", preset="gallery")

@@ -119,6 +119,15 @@ class GalleryDownloader:
             url,
         ]
         proc = self._run(cmd, timeout=300)
+        if proc.returncode != 0:
+            detail = (proc.stderr or "").strip().splitlines()
+            hint = detail[-1][:200] if detail else "bilinmeyen hata"
+            if "login" in hint.lower() or "cookie" in hint.lower():
+                raise GalleryError(
+                    "Bu gönderi için giriş gerekiyor. Bot sahibinin cookies.txt eklemesi lazım."
+                )
+            raise GalleryError(f"Gönderi indirilemedi: {hint}")
+
         files = sorted(
             (
                 path
@@ -128,13 +137,7 @@ class GalleryDownloader:
             key=lambda path: path.name,
         )
         if not files:
-            detail = (proc.stderr or "").strip().splitlines()
-            hint = detail[-1][:200] if detail else "medya bulunamadı"
-            if "login" in hint.lower() or "cookie" in hint.lower():
-                raise GalleryError(
-                    "Bu gönderi için giriş gerekiyor. Bot sahibinin cookies.txt eklemesi lazım."
-                )
-            raise GalleryError(f"Gönderi indirilemedi: {hint}")
+            raise GalleryError("Gönderi indirilemedi: medya bulunamadı")
         return files[: self._settings.gallery_limit]
 
 
