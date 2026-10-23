@@ -254,9 +254,12 @@ class Database:
         await self.conn.commit()
 
     async def count_downloads_today(self, user_id: int) -> int:
+        # created_at UTC'dir. Yerel gun baslangicini UTC'ye cevirerek karsilastir;
+        # boylece limit 24 saatlik kayan pencere yerine yerel gece yarisinda sifirlanir.
         async with self.conn.execute(
             "SELECT COUNT(*) AS c FROM downloads "
-            "WHERE user_id = ? AND status = 'ok' AND created_at >= datetime('now', '-1 day')",
+            "WHERE user_id = ? AND status = 'ok' "
+            "AND created_at >= datetime('now', 'localtime', 'start of day', 'utc')",
             (user_id,),
         ) as cur:
             row = await cur.fetchone()
@@ -271,7 +274,8 @@ class Database:
         return {
             "users": await scalar("SELECT COUNT(*) FROM users"),
             "users_today": await scalar(
-                "SELECT COUNT(*) FROM users WHERE first_seen >= datetime('now', '-1 day')"
+                "SELECT COUNT(*) FROM users WHERE first_seen >= "
+                "datetime('now', 'localtime', 'start of day', 'utc')"
             ),
             "groups": await scalar(
                 "SELECT COUNT(*) FROM chats WHERE chat_type IN ('group', 'supergroup')"
@@ -279,7 +283,7 @@ class Database:
             "downloads_ok": await scalar("SELECT COUNT(*) FROM downloads WHERE status = 'ok'"),
             "downloads_today": await scalar(
                 "SELECT COUNT(*) FROM downloads WHERE status = 'ok' "
-                "AND created_at >= datetime('now', '-1 day')"
+                "AND created_at >= datetime('now', 'localtime', 'start of day', 'utc')"
             ),
             "errors": await scalar("SELECT COUNT(*) FROM downloads WHERE status = 'error'"),
             "bytes": await scalar("SELECT COALESCE(SUM(filesize), 0) FROM downloads WHERE status = 'ok'"),

@@ -48,7 +48,7 @@ log = logging.getLogger(__name__)
 router = Router(name="download")
 
 _last_request: dict[int, float] = {}
-_probe_retries: dict[str, tuple[int, int, str, str]] = {}
+_probe_retries: dict[str, tuple[int, int, int, str, str]] = {}
 PROBE_TIMEOUT = 90
 GALLERY_HOSTS = ("instagram.com", "instagr.am")
 
@@ -154,11 +154,12 @@ def _info_text(
 async def _limit_error(
     user_id: int, db: Database, settings: Settings, queue: JobQueue
 ) -> str | None:
-    if queue.pending_for(user_id) >= settings.max_queue_per_user:
+    pending = queue.pending_for(user_id)
+    if pending >= settings.max_queue_per_user:
         return "🧵 Kuyruğunuz dolu. Mevcut indirmeler bitince tekrar deneyin."
     if settings.daily_limit and not await db.is_promoted(user_id):
         used = await db.count_downloads_today(user_id)
-        if used >= settings.daily_limit:
+        if used + pending >= settings.daily_limit:
             return (
                 f"📉 Günlük indirme limitinize ({settings.daily_limit}) ulaştınız. "
                 "Yarın tekrar deneyebilirsiniz."
@@ -206,10 +207,10 @@ def _message_text(message: Message) -> str:
 
 
 def _remember_probe_failure(
-    chat_id: int, user_id: int, text: str, url: str
+    chat_id: int, user_id: int, message_id: int, text: str, url: str
 ) -> InlineKeyboardMarkup:
     token = uuid.uuid4().hex[:10]
-    _probe_retries[token] = (chat_id, user_id, text, url)
+    _probe_retries[token] = (chat_id, user_id, message_id, text, url)
     while len(_probe_retries) > 200:
         _probe_retries.pop(next(iter(_probe_retries)))
     return InlineKeyboardMarkup(
@@ -339,7 +340,9 @@ async def _process_text(
                 chat_id,
                 status.message_id,
                 "⌛️ Platform yanıt vermedi. Lütfen tekrar deneyin.",
-                keyboard=_remember_probe_failure(chat_id, user_id, text, url),
+                keyboard=_remember_probe_failure(
+                    chat_id, user_id, status.message_id, text, url
+                ),
                 wait=True,
             )
             await queue.forget_status(chat_id, status.message_id)
@@ -352,7 +355,9 @@ async def _process_text(
                     chat_id,
                     status.message_id,
                     f"❌ {escape(str(exc))}",
-                    keyboard=_remember_probe_failure(chat_id, user_id, text, url),
+                    keyboard=_remember_probe_failure(
+                        chat_id, user_id, status.message_id, text, url
+                    ),
                     wait=True,
                 )
                 await queue.forget_status(chat_id, status.message_id)
@@ -363,7 +368,9 @@ async def _process_text(
                 chat_id,
                 status.message_id,
                 "❌ Bağlantı incelenemedi. Lütfen tekrar deneyin.",
-                keyboard=_remember_probe_failure(chat_id, user_id, text, url),
+                keyboard=_remember_probe_failure(
+                    chat_id, user_id, status.message_id, text, url
+                ),
                 wait=True,
             )
             await queue.forget_status(chat_id, status.message_id)
@@ -376,7 +383,9 @@ async def _process_text(
                     chat_id,
                     status.message_id,
                     "❌ Bu gönderide indirilebilir video bulunamadı.",
-                    keyboard=_remember_probe_failure(chat_id, user_id, text, url),
+                    keyboard=_remember_probe_failure(
+                        chat_id, user_id, status.message_id, text, url
+                    ),
                     wait=True,
                 )
                 await queue.forget_status(chat_id, status.message_id)
@@ -501,17 +510,25 @@ async def on_retry_text(
         return
 
     token = (callback.data or "").split("|", 1)[1]
-    item = _probe_retries.pop(token, None)
+    item = _probe_retries.get(token)
     if item is None:
         await callback.answer(
             "Bu deneme artık geçersiz. Linki tekrar gönderin.", show_alert=True
         )
         return
 
-    chat_id, user_id, text, url = item
-    if callback.message.chat.id != chat_id:
-        await callback.answer("Bu buton bu sohbete ait değil.", show_alert=True)
+    chat_id, user_id, message_id, text, url = item
+    if (
+        callback.message.chat.id != chat_id
+        or callback.from_user.id != user_id
+        or callback.message.message_id != message_id
+    ):
+        await callback.answer(
+            "Bu buton başka bir isteğe ait. Linki kendiniz gönderin.",
+            show_alert=True,
+        )
         return
+    _probe_retries.pop(token, None)
 
     await callback.answer("Yeniden denendi 🔁")
     await _process_text(
@@ -537,7 +554,10 @@ async def on_retry(callback: CallbackQuery, queue: JobQueue) -> None:
 
     job_id = (callback.data or "").split("|", 1)[1]
     if not await queue.retry(
-        job_id, callback.message.chat.id, callback.message.message_id
+        job_id,
+        callback.message.chat.id,
+        callback.message.message_id,
+        callback.from_user.id,
     ):
         await callback.answer(
             "Bu iş artık yeniden denenemiyor. Linki tekrar gönderin.",

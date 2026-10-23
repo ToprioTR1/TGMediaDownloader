@@ -77,6 +77,10 @@ class QueueFullError(Exception):
     """Kullanicinin kuyrugu dolu."""
 
 
+class DailyLimitError(QueueFullError):
+    """Kullanicinin gunluk indirme hakki doldu."""
+
+
 class JobQueue:
     def __init__(
         self,
@@ -103,6 +107,7 @@ class JobQueue:
         )
         self._progress_interval = self._status.progress_interval
         self._queue: asyncio.Queue[Job] = asyncio.Queue()
+        self._submit_lock = asyncio.Lock()
         self._tasks: list[asyncio.Task[None]] = []
         self._pending: Counter[int] = Counter()
         self._jobs: dict[tuple[int, str, str], Job] = {}
@@ -202,11 +207,19 @@ class JobQueue:
         """Son hata/uyari mesajini bellekte tutmayi birakir."""
         await self._status.forget(chat_id, message_id)
 
-    async def retry(self, job_id: str, chat_id: int, message_id: int) -> bool:
+    async def retry(
+        self, job_id: str, chat_id: int, message_id: int, user_id: int
+    ) -> bool:
         """Hata alan bir isi ayni mesaji duzenleyerek tekrar kuyruga alir."""
-        job = self._retry_jobs.pop(job_id, None)
-        if job is None:
+        job = self._retry_jobs.get(job_id)
+        if (
+            job is None
+            or job.chat_id != chat_id
+            or job.status_message_id != message_id
+            or job.user_id != user_id
+        ):
             return False
+        self._retry_jobs.pop(job_id, None)
 
         # Yeni mesaj gondermek yerine mevcut hata mesajini durum mesajina cevir.
         await self._status.edit(
@@ -243,6 +256,7 @@ class JobQueue:
                 ),
                 wait=True,
             )
+            await self._status.forget(chat_id, message_id)
             return False
         if not queued:
             # Ayni is zaten calisiyor; bu eski hata mesajini birakma.
@@ -257,26 +271,43 @@ class JobQueue:
         is zaten varsa False doner.
         """
         key = (job.user_id, job.chat_id, job.url, job.cache_preset)
-        existing = self._jobs.get(key)
-        if existing is not None and existing is not job:
-            log.info(
-                "Ayni is zaten var, yeni is acilmadi: kullanici=%s sohbet=%s url=%s preset=%s",
-                job.user_id,
-                job.chat_id,
-                job.url,
-                job.preset,
-            )
-            return False
+        # Tekilleştirme ve limit kontrolü tek bir kilit altında yapılır; aksi
+        # halde aynı kullanıcının eşzamanlı istekleri günlük limiti aşabilir.
+        async with self._submit_lock:
+            existing = self._jobs.get(key)
+            if existing is not None and existing is not job:
+                log.info(
+                    "Ayni is zaten var, yeni is acilmadi: kullanici=%s sohbet=%s url=%s preset=%s",
+                    job.user_id,
+                    job.chat_id,
+                    job.url,
+                    job.preset,
+                )
+                return False
 
-        if self._pending[job.user_id] >= self._settings.max_queue_per_user:
-            raise QueueFullError(
-                "Aynı anda en fazla "
-                f"{self._settings.max_queue_per_user} indirme sıraya alabilirsiniz."
-            )
-        self._pending[job.user_id] += 1
-        self._jobs[key] = job
-        self._queue.put_nowait(job)
-        job.status_stage = "queued"
+            if self._pending[job.user_id] >= self._settings.max_queue_per_user:
+                raise QueueFullError(
+                    "Aynı anda en fazla "
+                    f"{self._settings.max_queue_per_user} indirme sıraya alabilirsiniz."
+                )
+
+            if (
+                self._settings.daily_limit
+                and not await self._db.is_promoted(job.user_id)
+            ):
+                used = await self._db.count_downloads_today(job.user_id)
+                if used + self._pending[job.user_id] >= self._settings.daily_limit:
+                    raise DailyLimitError(
+                        f"📉 Günlük indirme limitinize "
+                        f"({self._settings.daily_limit}) ulaştınız. "
+                        "Yarın tekrar deneyebilirsiniz."
+                    )
+
+            self._pending[job.user_id] += 1
+            self._jobs[key] = job
+            self._queue.put_nowait(job)
+            job.status_stage = "queued"
+
         await self._status.edit(
             job.chat_id,
             job.status_message_id,

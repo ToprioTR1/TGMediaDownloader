@@ -14,6 +14,7 @@ from aiogram.types import (
 
 from ..config import Settings
 from ..database import Database
+from ..queue import JobQueue
 from ..utils import escape, human_size
 
 router = Router(name="start")
@@ -225,8 +226,15 @@ async def cmd_settings(message: Message, db: Database, db_user: dict) -> None:
 
 
 @router.message(Command("me", "profil", "limit"))
-async def cmd_me(message: Message, db: Database, db_user: dict, settings: Settings) -> None:
+async def cmd_me(
+    message: Message,
+    db: Database,
+    db_user: dict,
+    settings: Settings,
+    queue: JobQueue,
+) -> None:
     today = await db.count_downloads_today(message.from_user.id)
+    pending = queue.pending_for(message.from_user.id)
     user = await db.get_user(message.from_user.id) or db_user
     promoted = bool(user.get("is_promoted"))
     daily = settings.daily_limit or 0
@@ -235,21 +243,27 @@ async def cmd_me(message: Message, db: Database, db_user: dict, settings: Settin
     elif not daily:
         left = "sınırsız"
     else:
-        left = str(max(0, daily - today))
+        left = str(max(0, daily - today - pending))
     await message.answer(
         "<b>📊 Kullanım bilgileriniz</b>\n"
         f"👤 Ad: {escape(user.get('first_name'))}\n"
         f"🆔 ID: <code>{user.get('id')}</code>\n"
         f"⬇️ Toplam indirme: {user.get('downloads', 0)}\n"
         f"💾 Toplam veri: {human_size(user.get('bytes_sent', 0))}\n"
-        f"📅 Bugün: {today} • kalan hak: {left}"
+        f"📅 Bugün: {today} • sırada: {pending} • kalan hak: {left}"
         f"{_promoted_line(promoted)}"
     )
 
 
 @router.callback_query(lambda c: c.data == "usage")
-async def cb_usage(callback: CallbackQuery, db: Database, settings: Settings) -> None:
+async def cb_usage(
+    callback: CallbackQuery,
+    db: Database,
+    settings: Settings,
+    queue: JobQueue,
+) -> None:
     today = await db.count_downloads_today(callback.from_user.id)
+    pending = queue.pending_for(callback.from_user.id)
     user = await db.get_user(callback.from_user.id) or {}
     promoted = bool(user.get("is_promoted"))
     daily = settings.daily_limit or 0
@@ -258,13 +272,13 @@ async def cb_usage(callback: CallbackQuery, db: Database, settings: Settings) ->
     elif not daily:
         left = "sınırsız"
     else:
-        left = str(max(0, daily - today))
+        left = str(max(0, daily - today - pending))
     await callback.answer()
     if callback.message:
         await callback.message.answer(
             "<b>📊 Kullanım bilgileriniz</b>\n"
             f"⬇️ Toplam indirme: {user.get('downloads', 0)}\n"
             f"💾 Toplam veri: {human_size(user.get('bytes_sent', 0))}\n"
-            f"📅 Bugün: {today} • kalan hak: {left}"
+            f"📅 Bugün: {today} • sırada: {pending} • kalan hak: {left}"
             f"{_promoted_line(promoted)}"
         )

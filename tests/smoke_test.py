@@ -66,7 +66,7 @@ from bot.handlers.download import (  # noqa: E402
     _resolve_preset,
 )
 from bot.middlewares import UserMiddleware  # noqa: E402
-from bot.queue import Job, JobQueue  # noqa: E402
+from bot.queue import DailyLimitError, Job, JobQueue  # noqa: E402
 from bot.status import StatusHub  # noqa: E402
 from bot.utils import (  # noqa: E402
     is_blocked_url,
@@ -597,7 +597,28 @@ async def main() -> int:
         # 11) veritabani kaydi
         user = await db.get_user(ADMIN.id)
         check(user is not None and user["downloads"] == 7, f"indirme kaydedilmedi: {user}")
-        print("11) DB kaydi OK")
+
+        # Gunluk sayim yerel gece yarisinda sifirlanmali (24 saatlik kayan pencere degil).
+        await db.conn.execute(
+            "INSERT INTO downloads(user_id, url, status, created_at) "
+            "VALUES(?, ?, 'ok', datetime('now', 'localtime', 'start of day', "
+            "'-1 second', 'utc'))",
+            (99, "https://example.com/old"),
+        )
+        await db.conn.execute(
+            "INSERT INTO downloads(user_id, url, status) VALUES(?, ?, 'ok')",
+            (99, "https://example.com/today"),
+        )
+        await db.conn.commit()
+        try:
+            check(
+                await db.count_downloads_today(99) == 1,
+                "gunluk sayim yerel gun sinirini kullanmiyor",
+            )
+        finally:
+            await db.conn.execute("DELETE FROM downloads WHERE user_id = 99")
+            await db.conn.commit()
+        print("11) DB kaydi + gunluk sinir OK")
 
         # 12) /stats
         mark = len(bot.calls)
@@ -785,7 +806,53 @@ async def main() -> int:
         )
         check(await q2.submit(j3) is True, "farkli sohbette yeni is acilmadi")
         await q2.stop()
-        print("18) ayni link dedup OK")
+
+        # Kuyruga ekleme sirasinda gunluk limit de denetlenmeli; ayni kullanicinin
+        # arka arkaya gelen istekleri limiti asmamali.
+        original_daily = settings.daily_limit
+        object.__setattr__(settings, "daily_limit", 2)
+        q4 = JobQueue(
+            bot,
+            db,
+            settings,
+            downloader,
+            gallery,
+            status_min_interval=0.01,
+            status_progress_interval=0.05,
+            status_retry_backoff=0.01,
+        )
+        try:
+            limited_a = Job(
+                id="lim1",
+                user_id=OTHER.id,
+                chat_id=OTHER.id,
+                status_message_id=9030,
+                url="https://example.com/limit-a",
+                preset="h:720",
+                title="Limit A",
+                platform="Test",
+            )
+            limited_b = Job(
+                id="lim2",
+                user_id=OTHER.id,
+                chat_id=OTHER.id,
+                status_message_id=9031,
+                url="https://example.com/limit-b",
+                preset="h:720",
+                title="Limit B",
+                platform="Test",
+            )
+            check(await q4.submit(limited_a) is True, "limitli ilk is kuyruga alinmadi")
+            try:
+                await q4.submit(limited_b)
+            except DailyLimitError:
+                pass
+            else:
+                check(False, "bekleyen is varken gunluk limit asildi")
+        finally:
+            await q4.stop()
+            object.__setattr__(settings, "daily_limit", original_daily)
+        print("18) ayni link dedup + gunluk limit OK")
 
         # 19) hata sonrasi yeniden dene
         q3 = JobQueue(
@@ -811,7 +878,12 @@ async def main() -> int:
         q3._remember_retry(failed)
         mark = len(bot.calls)
         check(
-            await q3.retry("fail1", ADMIN.id, 9010) is True,
+            await q3.retry("fail1", ADMIN.id, 9010, OTHER.id) is False,
+            "baska kullanici baskasinin isini yeniden denedi",
+        )
+        check("fail1" in q3._retry_jobs, "yetkisiz retry denemesi isi tuketti")
+        check(
+            await q3.retry("fail1", ADMIN.id, 9010, ADMIN.id) is True,
             "retry kuyruga alinmadi",
         )
         check(
@@ -830,7 +902,7 @@ async def main() -> int:
         retry_job = q3._jobs.get((ADMIN.id, ADMIN.id, failed.url, failed.preset))
         check(retry_job is not None and retry_job.id != "fail1", "retry isi olusmadi")
         check(
-            await q3.retry("fail1", ADMIN.id, 9010) is False,
+            await q3.retry("fail1", ADMIN.id, 9010, ADMIN.id) is False,
             "ayni retry iki kez calisti",
         )
         await q3.stop()
@@ -1015,13 +1087,34 @@ async def main() -> int:
                 f"kesif retry callback yanlis: {cb_data}",
             )
 
-            fake_status = simple_message("hata", 9500).as_(bot)
+            token = (cb_data or "").split("|", 1)[1]
+            check(token in download._probe_retries, "kesif retry tokeni kaydedilmedi")
+            probe_message_id = download._probe_retries[token][2]
+            fake_status = simple_message("hata", probe_message_id).as_(bot)
+
+            mark = len(bot.calls)
+            await dp.feed_update(
+                bot, callback_update(cb_data, fake_status, user=OTHER)
+            )
+            check(
+                token in download._probe_retries,
+                "baskasinin tiklamasi kesif retry tokenini tuketti",
+            )
+            check(
+                any(
+                    "başka" in (c[1].get("text") or "").lower()
+                    for c in bot.calls[mark:]
+                    if c[0] == "answer_callback_query"
+                ),
+                "yetkisiz kesif retry uyarisi verilmedi",
+            )
+
             mark = len(bot.calls)
             await dp.feed_update(bot, callback_update(cb_data, fake_status))
             check(
                 any(
                     c[0] == "edit_message_text"
-                    and c[1].get("message_id") == 9500
+                    and c[1].get("message_id") == probe_message_id
                     and "inceleniyor" in (c[1].get("text") or "")
                     for c in bot.calls[mark:]
                 ),
