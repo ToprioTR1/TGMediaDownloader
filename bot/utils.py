@@ -42,7 +42,8 @@ PLATFORM_NAMES = {
 
 
 def escape(text: str | None) -> str:
-    return html.escape(text or "", quote=False)
+    # quote=True: ayni yardimci HTML metinlerinde ve URL ozelliklerinde kullaniliyor.
+    return html.escape(text or "", quote=True)
 
 
 def extract_urls(text: str, limit: int = 3) -> list[str]:
@@ -173,7 +174,11 @@ def platform_name(extractor: str | None) -> str:
         return "Video"
     key = extractor.lower().replace(" ", "")
     for name, label in PLATFORM_NAMES.items():
-        if name in key:
+        if name == "x":
+            # "x" tek harfi "xvideos" gibi baska extractor'lara da uyardi.
+            if key == "x" or key.startswith("x:"):
+                return label
+        elif name in key:
             return label
     return extractor
 

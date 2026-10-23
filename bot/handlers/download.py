@@ -428,6 +428,16 @@ async def _process_text(
                 )
                 await queue.forget_status(chat_id, status.message_id)
                 continue
+            except Exception:  # noqa: BLE001 - DB/kuyruk hatasi mesaji asili birakmasin
+                log.exception("Galeri isi kuyruga alinamadi: %s", url)
+                await queue.edit_status(
+                    chat_id,
+                    status.message_id,
+                    "❌ İşlem sıraya alınamadı. Lütfen tekrar deneyin.",
+                    wait=True,
+                )
+                await queue.forget_status(chat_id, status.message_id)
+                continue
             if not queued:
                 # Ayni is zaten suruyor: fazladan durum mesaji birakma.
                 await queue.delete_status(chat_id, status.message_id)
@@ -481,6 +491,16 @@ async def _process_text(
                 chat_id,
                 status.message_id,
                 f"❌ {escape(str(exc))}",
+                wait=True,
+            )
+            await queue.forget_status(chat_id, status.message_id)
+            continue
+        except Exception:  # noqa: BLE001 - DB/kuyruk hatasi mesaji asili birakmasin
+            log.exception("Indirme isi kuyruga alinamadi: %s", url)
+            await queue.edit_status(
+                chat_id,
+                status.message_id,
+                "❌ İşlem sıraya alınamadı. Lütfen tekrar deneyin.",
                 wait=True,
             )
             await queue.forget_status(chat_id, status.message_id)
@@ -704,6 +724,19 @@ async def on_action(
             )
             await queue.forget_status(chat_id, status.message_id)
             await callback.answer(str(exc), show_alert=True)
+            return
+        except Exception:  # noqa: BLE001 - DB/kuyruk hatasi mesaji asili birakmasin
+            log.exception("Ses isi kuyruga alinamadi: %s", job.url)
+            await queue.edit_status(
+                chat_id,
+                status.message_id,
+                "❌ İşlem sıraya alınamadı. Lütfen tekrar deneyin.",
+                wait=True,
+            )
+            await queue.forget_status(chat_id, status.message_id)
+            await callback.answer(
+                "İşlem sıraya alınamadı. Lütfen tekrar deneyin.", show_alert=True
+            )
             return
         if not queued:
             await queue.delete_status(chat_id, status.message_id)

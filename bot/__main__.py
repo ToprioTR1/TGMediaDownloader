@@ -109,7 +109,7 @@ async def run() -> None:
 def main() -> None:
     try:
         asyncio.run(run())
-    except (KeyboardInterrupt, SystemExit):
+    except KeyboardInterrupt:
         pass
 
 
