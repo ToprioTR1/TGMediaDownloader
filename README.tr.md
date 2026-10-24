@@ -26,7 +26,8 @@ ile yazıldı, Docker ile çalışacak şekilde hazırlandı.
   resmi kısa link alan adları) işlenir; normal web sayfaları ağ isteği
   yapılmadan ve mesaj yazılmadan yok sayılır
 - 🖼 Instagram fotoğraf / carousel ve TikTok fotoğraf gönderileri (gallery-dl
-  ile, albüm olarak; `dosya` yazılırsa belge olarak)
+  ile; herkese açık Instagram gönderileri için embed yedeğiyle; albüm olarak,
+  `dosya` yazılırsa belge olarak)
 - 🚫 Her Python TCP `connect` anında SSRF koruması: yönlendirmeler, DNS
   rebinding, ikincil medya URL'leri ve bulut metadata adresleri reddedilir;
   konteyner çıkışı için host güvenlik duvarı yapılandırması dahildir
@@ -413,6 +414,7 @@ PYTHONPATH=. python tests/smoke_test.py             # bash
 
 python -m unittest tests.test_netguard -v           # SSRF/connect regresyon testleri
 python -m unittest tests.test_url_support -v        # yt-dlp URL eşleştirme testleri
+python -m unittest tests.test_instagram_embed -v    # Instagram embed ayrıştırma testleri
 ```
 
 Duman testi kendi verisini `.tmp/` altında oluşturur ve Telegram'a gerçek istek
@@ -458,6 +460,9 @@ kullanır ve ağ isteği yapmaz.
   oluşturabilir. Bunun yerine "Gönderim yanıtı alınamadı" uyarısı gösterilir.
 - Instagram fotoğraf/carousel ve TikTok fotoğraf gönderileri gallery-dl ile
   indirilir; video içeren gönderilerde kalite seçimi için yt-dlp kullanılır.
+  Instagram gallery-dl'yi giriş sayfasına yönlendirirse herkese açık
+  fotoğraf/carousel gönderileri embed sayfasından okunur; özel gönderiler için
+  yine `cookies.txt` gerekir.
 - `file_id` önbelleği SQLite'ta tutulur (`CACHE_DAYS`, varsayılan 30 gün).
   Telegram dosyayı reddederse önbellek otomatik temizlenir ve yeniden indirilir.
   Eski kayıtlar açılışta budanır; adminler `/cache` ile önbelleği inceleyebilir,

@@ -30,8 +30,9 @@ Built with Python 3.12 + [aiogram 3](https://github.com/aiogram/aiogram) +
 - 🚦 Only URLs matched by a yt-dlp site extractor (or a site's official
   short-link host) are processed; generic web pages are ignored locally
   without a network probe or reply
-- 🖼 Instagram photo / carousel and TikTok photo posts (via gallery-dl, sent
-  as an album; `dosya` sends them as documents)
+- 🖼 Instagram photo / carousel and TikTok photo posts (via gallery-dl, with an
+  Instagram embed fallback for public posts; sent as an album, `dosya` sends
+  them as documents)
 - 🚫 SSRF protection on every Python TCP `connect`: redirects, DNS rebinding,
   secondary media URLs, and cloud-metadata addresses are rejected; a host
   firewall config for container egress is included
@@ -424,6 +425,7 @@ PYTHONPATH=. python tests/smoke_test.py             # bash
 
 python -m unittest tests.test_netguard -v           # SSRF/connect regression tests
 python -m unittest tests.test_url_support -v        # yt-dlp URL matching tests
+python -m unittest tests.test_instagram_embed -v    # Instagram embed parser tests
 ```
 
 The smoke test creates its own data under `.tmp/` and does not make real requests
@@ -469,7 +471,9 @@ make no network requests.
   a "Gönderim yanıtı alınamadı" warning.
 - Instagram photo/carousel and TikTok photo posts are downloaded with
   gallery-dl; for posts that contain video, yt-dlp is used for quality
-  selection.
+  selection. If Instagram redirects gallery-dl to its login page, public
+  photo/carousel posts are read from the Instagram embed page instead; private
+  posts still require `cookies.txt`.
 - The `file_id` cache is stored in SQLite (`CACHE_DAYS`, 30 days by default).
   If Telegram rejects a file, the cache entry is removed automatically and the
   media is downloaded again. Old entries are pruned at startup, and admins can

@@ -18,6 +18,12 @@ from typing import Any
 
 from . import netguard
 from .config import Settings
+from .instagram_embed import (
+    InstagramEmbedError,
+    download_items as download_instagram_embed,
+    fetch_items as fetch_instagram_embed,
+    instagram_shortcode,
+)
 
 log = logging.getLogger(__name__)
 
@@ -97,8 +103,19 @@ class GalleryDownloader:
         TikTok kisa linkleri (`vt.tiktok.com` gibi) `--simulate` ciktisinda
         yalnizca kuyruk URL'si (tip 6) dondurur. Bu URL'yi bir kez daha
         cozerek gercek medya listesine ulasiriz.
+
+        Instagram giris duvarina takilirsa herkese acik gonderiler icin
+        embed sayfasindaki fotoğraf URL'lerine dusulur.
         """
-        return self._probe(url, set(), 0)
+        items = self._probe(url, set(), 0)
+        if items:
+            return items
+        if instagram_shortcode(url):
+            try:
+                return fetch_instagram_embed(url, self._settings.gallery_limit)
+            except InstagramEmbedError as exc:
+                log.info("Instagram embed kesif basarisiz (%s): %s", url, exc)
+        return []
 
     def _probe(
         self, url: str, seen: set[str], depth: int
@@ -149,15 +166,6 @@ class GalleryDownloader:
             url,
         ]
         proc = self._run(cmd, timeout=300)
-        if proc.returncode != 0:
-            detail = (proc.stderr or "").strip().splitlines()
-            hint = detail[-1][:200] if detail else "bilinmeyen hata"
-            if "login" in hint.lower() or "cookie" in hint.lower():
-                raise GalleryError(
-                    "Bu gönderi için giriş gerekiyor. Bot sahibinin cookies.txt eklemesi lazım."
-                )
-            raise GalleryError(f"Gönderi indirilemedi: {hint}")
-
         files = sorted(
             (
                 path
@@ -166,9 +174,31 @@ class GalleryDownloader:
             ),
             key=lambda path: path.name,
         )
-        if not files:
-            raise GalleryError("Gönderi indirilemedi: medya bulunamadı")
-        return files[: self._settings.gallery_limit]
+        if proc.returncode == 0 and files:
+            return files[: self._settings.gallery_limit]
+
+        # gallery-dl login duvarina takildiysa herkese acik Instagram
+        # gonderilerinde embed sayfasindan fotoğrafları indir.
+        if instagram_shortcode(url):
+            try:
+                embed_files = download_instagram_embed(
+                    url, outdir, self._settings.gallery_limit
+                )
+            except InstagramEmbedError as exc:
+                log.info("Instagram embed indirme basarisiz (%s): %s", url, exc)
+            else:
+                if embed_files:
+                    return embed_files[: self._settings.gallery_limit]
+
+        if proc.returncode != 0:
+            detail = (proc.stderr or "").strip().splitlines()
+            hint = detail[-1][:200] if detail else "bilinmeyen hata"
+            if "login" in hint.lower() or "cookie" in hint.lower():
+                raise GalleryError(
+                    "Bu gönderi için giriş gerekiyor. Bot sahibinin cookies.txt eklemesi lazım."
+                )
+            raise GalleryError(f"Gönderi indirilemedi: {hint}")
+        raise GalleryError("Gönderi indirilemedi: medya bulunamadı")
 
 
 def _queued_urls(data: Any, limit: int) -> list[str]:
