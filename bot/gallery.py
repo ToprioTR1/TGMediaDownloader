@@ -92,9 +92,20 @@ class GalleryDownloader:
     # ------------------------------------------------------------------ kesif
 
     def probe(self, url: str) -> list[dict[str, Any]]:
-        """Gönderideki medya sayisini ve meta verilerini dondurur."""
-        if not self.available:
+        """Gönderideki medya sayisini ve meta verilerini dondurur.
+
+        TikTok kisa linkleri (`vt.tiktok.com` gibi) `--simulate` ciktisinda
+        yalnizca kuyruk URL'si (tip 6) dondurur. Bu URL'yi bir kez daha
+        cozerek gercek medya listesine ulasiriz.
+        """
+        return self._probe(url, set(), 0)
+
+    def _probe(
+        self, url: str, seen: set[str], depth: int
+    ) -> list[dict[str, Any]]:
+        if not self.available or depth > 2 or url in seen:
             return []
+        seen.add(url)
         cmd = self._base_cmd() + [
             "--simulate",
             "--dump-json",
@@ -113,7 +124,14 @@ class GalleryDownloader:
             log.warning("gallery-dl JSON cozulemedi: %s", url)
             return []
 
-        return _items_from_json(data, self._settings.gallery_limit)
+        items = _items_from_json(data, self._settings.gallery_limit)
+        if items:
+            return items
+        for queued_url in _queued_urls(data, self._settings.gallery_limit):
+            items = self._probe(queued_url, seen, depth + 1)
+            if items:
+                return items
+        return []
 
     # ---------------------------------------------------------------- indirme
 
@@ -151,6 +169,24 @@ class GalleryDownloader:
         if not files:
             raise GalleryError("Gönderi indirilemedi: medya bulunamadı")
         return files[: self._settings.gallery_limit]
+
+
+def _queued_urls(data: Any, limit: int) -> list[str]:
+    """gallery-dl `--dump-json` ciktisindaki kuyruk (tip 6) URL'lerini alir."""
+    if not isinstance(data, list):
+        return []
+    urls: list[str] = []
+    for entry in data:
+        if not isinstance(entry, list) or len(entry) < 2:
+            continue
+        if entry[0] != 6:  # Message.Queue
+            continue
+        url = entry[1]
+        if isinstance(url, str) and url.startswith(("http://", "https://")):
+            urls.append(url)
+            if len(urls) >= limit:
+                break
+    return urls
 
 
 def _items_from_json(data: Any, limit: int) -> list[dict[str, Any]]:

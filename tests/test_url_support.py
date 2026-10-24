@@ -6,6 +6,7 @@ r"""Yalnızca yt-dlp'nin tanıdığı URL'lerin işlenmesini doğrular.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import unittest
@@ -22,6 +23,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from bot.downloader import DownloadError, ytdlp_supports_url  # noqa: E402
+from bot.gallery import GalleryDownloader, _queued_urls  # noqa: E402
 from bot.handlers.download import (  # noqa: E402
     _gallery_platform,
     _gallery_title,
@@ -103,6 +105,60 @@ class UrlSupportTests(unittest.TestCase):
             "TikTok başlığı",
         )
         self.assertEqual(_gallery_title([], "TikTok"), "TikTok gönderisi")
+
+
+class GalleryQueueParsingTests(unittest.TestCase):
+    def test_queue_urls_are_extracted(self) -> None:
+        data = [
+            [2, {"category": "tiktok"}],
+            [6, "https://www.tiktok.com/@user/photo/123", {}],
+            [6, "ftp://example.com/ignore"],
+            [6, "https://www.tiktok.com/@user/photo/456"],
+        ]
+        self.assertEqual(
+            _queued_urls(data, 10),
+            [
+                "https://www.tiktok.com/@user/photo/123",
+                "https://www.tiktok.com/@user/photo/456",
+            ],
+        )
+        self.assertEqual(
+            _queued_urls(data, 1),
+            ["https://www.tiktok.com/@user/photo/123"],
+        )
+
+
+class _QueueFollowingGallery(GalleryDownloader):
+    def __init__(self) -> None:
+        self.available = True
+        self._settings = SimpleNamespace(gallery_limit=10)
+        self.calls: list[str] = []
+
+    def _base_cmd(self) -> list[str]:
+        return []
+
+    def _common_args(self) -> list[str]:
+        return []
+
+    def _run(self, cmd, timeout):
+        url = cmd[-1]
+        self.calls.append(url)
+        if url == TIKTOK_SHORT_URL:
+            data = [[6, TIKTOK_PHOTO_URL, {}]]
+        else:
+            data = [[3, "https://cdn.example/1.jpg", {"extension": "jpg"}]]
+        return SimpleNamespace(returncode=0, stdout=json.dumps(data), stderr="")
+
+
+class GalleryProbeTests(unittest.TestCase):
+    def test_short_link_queue_is_followed(self) -> None:
+        gallery = _QueueFollowingGallery()
+
+        items = gallery.probe(TIKTOK_SHORT_URL)
+
+        self.assertEqual(gallery.calls, [TIKTOK_SHORT_URL, TIKTOK_PHOTO_URL])
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["url"], "https://cdn.example/1.jpg")
 
 
 class _FakeBot:
