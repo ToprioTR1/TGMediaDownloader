@@ -25,8 +25,8 @@ ile yazıldı, Docker ile çalışacak şekilde hazırlandı.
 - 🚦 Yalnızca yt-dlp site eşleştiricisinin tanıdığı URL'ler (veya sitelerin
   resmi kısa link alan adları) işlenir; normal web sayfaları ağ isteği
   yapılmadan ve mesaj yazılmadan yok sayılır
-- 🖼 Instagram fotoğraf / carousel gönderileri (gallery-dl ile, albüm olarak;
-  `dosya` yazılırsa belge olarak)
+- 🖼 Instagram fotoğraf / carousel ve TikTok fotoğraf gönderileri (gallery-dl
+  ile, albüm olarak; `dosya` yazılırsa belge olarak)
 - 🚫 Her Python TCP `connect` anında SSRF koruması: yönlendirmeler, DNS
   rebinding, ikincil medya URL'leri ve bulut metadata adresleri reddedilir;
   konteyner çıkışı için host güvenlik duvarı yapılandırması dahildir
@@ -145,7 +145,7 @@ Tüm ayarlar `.env` üzerinden okunur ([bot/config.py](bot/config.py)):
 | `QUALITY_YOUTUBE` | `720` | Kalite yazılmayan YouTube linklerinde hedef |
 | `QUALITY_DEFAULT` | `720` | Diğer platformlar için hedef |
 | `CACHE_DAYS` | `30` | `file_id` önbellek süresi, gün (0 = kapalı) |
-| `GALLERY_ENABLED` | `1` | Instagram fotoğraf/carousel desteği (gallery-dl) |
+| `GALLERY_ENABLED` | `1` | Instagram/TikTok fotoğraf desteği (gallery-dl) |
 | `GALLERY_LIMIT` | `10` | Gönderi başına en fazla medya (Telegram albüm limiti 10) |
 | `AUTO_UPDATE_YTDLP` | `1` | Docker açılışında yt-dlp + gallery-dl güncelle |
 | `COOKIES_FILE` | — | `cookies.txt` yolu (çerez gereken siteler için) |
@@ -377,7 +377,7 @@ bot/
 ├── config.py        # .env → Settings (+ platform kalite varsayılanları)
 ├── database.py      # SQLite: kullanıcılar, indirmeler, file_id önbelleği
 ├── downloader.py    # yt-dlp: probe (metadata + boyut tahmini) + indirme
-├── gallery.py       # gallery-dl: Instagram fotoğraf/carousel indirme
+├── gallery.py       # gallery-dl: Instagram/TikTok fotoğraf indirme
 ├── queue.py         # iş kuyruğu, işçiler, ilerleme, önbellek, Telegram gönderimi
 ├── keyboards.py     # inline klavyeler (video aksiyonları, admin paneli)
 ├── middlewares.py   # kullanıcı kaydı
@@ -392,7 +392,8 @@ Akış: `handlers/download.py` → `downloader.probe()` →
 `handlers/download.py:_resolve_preset()` (en yakın kalite + boyut koruması) →
 `queue.JobQueue.submit()` → işçi `downloader.download()` → `bot.send_video()`
 → `database.cache_put()` + `database.record_download()`.
-Instagram fotoğraf gönderilerinde yt-dlp başarısız olursa `gallery.py` devreye girer.
+Instagram ve TikTok fotoğraf gönderilerinde yt-dlp başarısız olursa
+`gallery.py` devreye girer.
 
 ## Test
 
@@ -431,7 +432,7 @@ kullanır ve ağ isteği yapmaz.
 | İndirme `güvenlik politikası bu hedefi engelledi` hatası veriyor | Hedef özel/metadata adres, DNS başarısız veya `PROXY_URL` var ama `NETGUARD_ALLOW_PROXY=1` değil (proxy atlanır; doğrudan bağlantı başarısız olabilir); `docker compose logs -f bot` kontrol et |
 | İndirmeler yalnızca firewall kapatınca çalışıyor | `deploy/ssrf-firewall.nft` kurallarını yeniden uygula; botun hâlâ `172.28.240.3` olduğunu ve yerel API izin kuralının eşleştiğini doğrula |
 | İndirme çalışmıyor, başka site çalışıyor | `docker compose restart bot` (açılışta yt-dlp güncellenir) veya `docker compose build --no-cache` |
-| Instagram fotoğrafı inmiyor | `gallery-dl` kurulu mu? (`GALLERY_ENABLED=1`); özel gönderiler için `cookies.txt` gerekir |
+| Instagram/TikTok fotoğrafı inmiyor | `gallery-dl` kurulu mu? (`GALLERY_ENABLED=1`); özel gönderiler için `cookies.txt` gerekir |
 | `Request Entity Too Large` | 50 MB limiti; daha düşük kalite seç veya yerel Bot API kur |
 | Bot cevap vermiyor | `docker compose logs -f bot`; webhook varsa silinir, polling kullanılır |
 
@@ -455,8 +456,8 @@ kullanır ve ağ isteği yapmaz.
   Telegram zamanında yanıt vermezse bot dosyayı otomatik olarak **tekrar
   göndermez**; çünkü dosya çoktan ulaşmış olabilir ve tekrar deneme kopya
   oluşturabilir. Bunun yerine "Gönderim yanıtı alınamadı" uyarısı gösterilir.
-- Instagram fotoğraf/carousel gönderileri gallery-dl ile indirilir; video içeren
-  gönderilerde kalite seçimi için yt-dlp kullanılır.
+- Instagram fotoğraf/carousel ve TikTok fotoğraf gönderileri gallery-dl ile
+  indirilir; video içeren gönderilerde kalite seçimi için yt-dlp kullanılır.
 - `file_id` önbelleği SQLite'ta tutulur (`CACHE_DAYS`, varsayılan 30 gün).
   Telegram dosyayı reddederse önbellek otomatik temizlenir ve yeniden indirilir.
   Eski kayıtlar açılışta budanır; adminler `/cache` ile önbelleği inceleyebilir,

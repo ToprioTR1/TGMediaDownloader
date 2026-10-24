@@ -6,7 +6,8 @@ Kural:
   (Instagram 1280p, TikTok 1012p, YouTube 720p, digerleri 720p).
 - Secilen kalite Telegram boyut limitini asacaksa bir alt kaliteye inilir.
 - "mp3" / "ses" yazilirsa sadece ses indirilir.
-- Instagram fotoğraf/carousel gönderileri gallery-dl ile indirilir.
+- Instagram fotoğraf/carousel ve TikTok fotoğraf gönderileri gallery-dl ile
+  indirilir.
 """
 
 from __future__ import annotations
@@ -52,24 +53,67 @@ _last_request: dict[int, float] = {}
 _probe_retries: dict[str, tuple[int, int, int, str, str]] = {}
 PROBE_TIMEOUT = 90
 GALLERY_HOSTS = ("instagram.com", "instagr.am")
+TIKTOK_SHORT_HOSTS = {"vm.tiktok.com", "vt.tiktok.com"}
 
 
 class SizeLimitError(Exception):
     """Secilen kalite Telegram limitine sigmiyor."""
 
 
-def _gallery_url(url: str) -> bool:
+def _url_host(url: str) -> str:
     try:
-        host = (urlparse(url).hostname or "").lower().rstrip(".")
+        return (urlparse(url).hostname or "").lower().rstrip(".")
     except ValueError:
+        return ""
+
+
+def _is_tiktok_host(host: str) -> bool:
+    return (
+        host == "tiktok.com"
+        or host.endswith(".tiktok.com")
+        or host == "tiktokv.com"
+        or host.endswith(".tiktokv.com")
+    )
+
+
+def _tiktok_path(url: str) -> str:
+    try:
+        return urlparse(url).path
+    except ValueError:
+        return ""
+
+
+def _tiktok_photo_url(url: str) -> bool:
+    """Doğrudan TikTok fotoğraf gönderisi mi? (Kısa linkler hariç.)"""
+    return _is_tiktok_host(_url_host(url)) and "/photo/" in _tiktok_path(url)
+
+
+def _tiktok_gallery_url(url: str) -> bool:
+    """TikTok fotoğraf paylaşımı veya paylaşım kısa linki mi?"""
+    host = _url_host(url)
+    if host in TIKTOK_SHORT_HOSTS:
+        return True
+    if not _is_tiktok_host(host):
         return False
+    path = _tiktok_path(url)
+    return "/photo/" in path or path.startswith("/t/")
+
+
+def _gallery_url(url: str) -> bool:
+    host = _url_host(url)
+    if _tiktok_gallery_url(url):
+        return True
     return any(host == domain or host.endswith(f".{domain}") for domain in GALLERY_HOSTS)
+
+
+def _gallery_platform(url: str) -> str:
+    return "TikTok" if _is_tiktok_host(_url_host(url)) else "Instagram"
 
 
 def _supports_url(
     downloader: Downloader, gallery: GalleryDownloader, url: str
 ) -> bool:
-    """URL'yi yt-dlp site eşleştiricisi veya Instagram galerisi destekliyor mu?"""
+    """URL'yi yt-dlp site eşleştiricisi veya fotoğraf galerisi destekliyor mu?"""
     if downloader.supports_url(url):
         return True
     return bool(
@@ -78,16 +122,20 @@ def _supports_url(
 
 
 def _needs_gallery(info: MediaInfo) -> bool:
-    """Instagram gönderisinde video/ses akışı yoksa fotoğraf gönderisidir."""
-    return info.platform == "Instagram" and not info.heights and not info.has_audio
+    """Video/ses akışı olmayan Instagram/TikTok gönderisi fotoğraftır."""
+    return (
+        info.platform in {"Instagram", "TikTok"}
+        and not info.heights
+        and not info.has_audio
+    )
 
 
-def _gallery_title(items: list[dict]) -> str:
-    for key in ("description", "caption", "title", "username"):
+def _gallery_title(items: list[dict], platform: str = "Instagram") -> str:
+    for key in ("description", "desc", "caption", "title", "username", "user"):
         value = items[0].get(key) if items else None
         if isinstance(value, str) and value.strip():
             return value.strip().splitlines()[0][:150]
-    return "Instagram gönderisi"
+    return f"{platform} gönderisi"
 
 
 def _resolve_preset(
@@ -361,11 +409,19 @@ async def _process_text(
 
         info: MediaInfo | None = None
         gallery_items: list[dict] | None = None
+        gallery_checked = False
+
+        # yt-dlp TikTok fotoğraf gönderilerini desteklemiyor; doğrudan
+        # gallery-dl kullan. Kısa linkler önce yt-dlp ile denenir.
+        if _tiktok_photo_url(url) and gallery.available:
+            gallery_items = await _probe_gallery(gallery, url)
+            gallery_checked = True
 
         try:
-            info = await asyncio.wait_for(
-                asyncio.to_thread(downloader.probe, url), timeout=PROBE_TIMEOUT
-            )
+            if gallery_items is None:
+                info = await asyncio.wait_for(
+                    asyncio.to_thread(downloader.probe, url), timeout=PROBE_TIMEOUT
+                )
         except asyncio.TimeoutError:
             await queue.edit_status(
                 chat_id,
@@ -379,9 +435,23 @@ async def _process_text(
             await queue.forget_status(chat_id, status.message_id)
             continue
         except DownloadError as exc:
-            if _gallery_url(url):
+            if not gallery_checked and _gallery_url(url):
                 gallery_items = await _probe_gallery(gallery, url)
             if not gallery_items:
+                if gallery_checked:
+                    # TikTok fotoğraf gönderisi tanınıyor; galeri geçici
+                    # olarak başarısız olduysa sessiz kalmak yerine bildir.
+                    await queue.edit_status(
+                        chat_id,
+                        status.message_id,
+                        "❌ Bu gönderideki fotoğraflar alınamadı.",
+                        keyboard=_remember_probe_failure(
+                            chat_id, user_id, status.message_id, text, url
+                        ),
+                        wait=True,
+                    )
+                    await queue.forget_status(chat_id, status.message_id)
+                    continue
                 if str(exc) == UNSUPPORTED_URL_TEXT:
                     # Yerel kontrolu gecmis olsa da yt-dlp URL'yi tanimadi;
                     # desteklenmeyen linklerde oldugu gibi sessizce bitir.
@@ -429,7 +499,8 @@ async def _process_text(
 
         # ---------------------------------------------------------- galeri
         if gallery_items is not None:
-            title = _gallery_title(gallery_items)
+            gallery_platform = _gallery_platform(url)
+            title = _gallery_title(gallery_items, gallery_platform)
             job = Job(
                 id=uuid.uuid4().hex[:10],
                 user_id=user_id,
@@ -438,7 +509,7 @@ async def _process_text(
                 url=url,
                 preset="gallery",
                 title=title,
-                platform="Instagram",
+                platform=gallery_platform,
                 kind="gallery",
                 source_url=url,
                 show_caption=show_caption,

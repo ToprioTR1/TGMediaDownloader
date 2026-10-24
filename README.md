@@ -30,8 +30,8 @@ Built with Python 3.12 + [aiogram 3](https://github.com/aiogram/aiogram) +
 - 🚦 Only URLs matched by a yt-dlp site extractor (or a site's official
   short-link host) are processed; generic web pages are ignored locally
   without a network probe or reply
-- 🖼 Instagram photo / carousel posts (via gallery-dl, sent as an album;
-  `dosya` sends them as documents)
+- 🖼 Instagram photo / carousel and TikTok photo posts (via gallery-dl, sent
+  as an album; `dosya` sends them as documents)
 - 🚫 SSRF protection on every Python TCP `connect`: redirects, DNS rebinding,
   secondary media URLs, and cloud-metadata addresses are rejected; a host
   firewall config for container egress is included
@@ -152,7 +152,7 @@ All settings are read from `.env` ([bot/config.py](bot/config.py)):
 | `QUALITY_YOUTUBE` | `720` | Target for YouTube links without a quality |
 | `QUALITY_DEFAULT` | `720` | Target for other platforms |
 | `CACHE_DAYS` | `30` | `file_id` cache lifetime in days (0 = disabled) |
-| `GALLERY_ENABLED` | `1` | Instagram photo/carousel support (gallery-dl) |
+| `GALLERY_ENABLED` | `1` | Instagram/TikTok photo support (gallery-dl) |
 | `GALLERY_LIMIT` | `10` | Maximum media per post (Telegram album limit is 10) |
 | `AUTO_UPDATE_YTDLP` | `1` | Update yt-dlp + gallery-dl on Docker startup |
 | `COOKIES_FILE` | — | Path to `cookies.txt` (for sites that require cookies) |
@@ -388,7 +388,7 @@ bot/
 ├── config.py        # .env → Settings (+ per-platform quality defaults)
 ├── database.py      # SQLite: users, downloads, file_id cache
 ├── downloader.py    # yt-dlp: probe (metadata + size estimate) + download
-├── gallery.py       # gallery-dl: Instagram photo/carousel download
+├── gallery.py       # gallery-dl: Instagram/TikTok photo download
 ├── queue.py         # job queue, workers, progress, cache, Telegram delivery
 ├── keyboards.py     # inline keyboards (video actions, admin panel)
 ├── middlewares.py   # user registration
@@ -403,7 +403,8 @@ Flow: `handlers/download.py` → `downloader.probe()` →
 `handlers/download.py:_resolve_preset()` (nearest quality + size guard) →
 `queue.JobQueue.submit()` → worker `downloader.download()` → `bot.send_video()`
 → `database.cache_put()` + `database.record_download()`.
-For Instagram photo posts, `gallery.py` takes over if yt-dlp fails.
+For Instagram and TikTok photo posts, `gallery.py` takes over if yt-dlp
+cannot handle the post.
 
 ## Tests
 
@@ -442,7 +443,7 @@ make no network requests.
 | Download fails with `güvenlik politikası bu hedefi engelledi` | The target is private/metadata, DNS failed, or `PROXY_URL` is set without `NETGUARD_ALLOW_PROXY=1` (the proxy is bypassed; the direct connection may fail); check `docker compose logs -f bot` |
 | Downloads work only after disabling the firewall | Re-apply `deploy/ssrf-firewall.nft`; make sure the bot still uses `172.28.240.3` and the local API allow rule matches |
 | One site stops working while others work | `docker compose restart bot` (yt-dlp updates on startup) or `docker compose build --no-cache` |
-| Instagram photos are not downloading | Is `gallery-dl` installed? (`GALLERY_ENABLED=1`); private posts require `cookies.txt` |
+| Instagram/TikTok photos are not downloading | Is `gallery-dl` installed? (`GALLERY_ENABLED=1`); private posts require `cookies.txt` |
 | `Request Entity Too Large` | The 50 MB limit; choose a lower quality or set up a local Bot API server |
 | Bot does not respond | `docker compose logs -f bot`; any webhook is removed and polling is used |
 
@@ -466,8 +467,9 @@ make no network requests.
   does not answer in time, the bot does **not** resend automatically, because the
   file may already have arrived and a retry could duplicate it. Instead it shows
   a "Gönderim yanıtı alınamadı" warning.
-- Instagram photo/carousel posts are downloaded with gallery-dl; for posts that
-  contain video, yt-dlp is used for quality selection.
+- Instagram photo/carousel and TikTok photo posts are downloaded with
+  gallery-dl; for posts that contain video, yt-dlp is used for quality
+  selection.
 - The `file_id` cache is stored in SQLite (`CACHE_DAYS`, 30 days by default).
   If Telegram rejects a file, the cache entry is removed automatically and the
   media is downloaded again. Old entries are pruned at startup, and admins can
