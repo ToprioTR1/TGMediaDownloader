@@ -430,6 +430,19 @@ async def main() -> int:
             f"{tiktok_height}p" in (media[0][1].get("caption") or ""),
             f"varsayilan kalite uygulanmadi: {media[0][1].get('caption')}",
         )
+        if shutil.which("ffprobe"):
+            video_entry = media[0][1]
+            check(
+                isinstance(video_entry.get("width"), int)
+                and video_entry["width"] > 0
+                and isinstance(video_entry.get("height"), int)
+                and video_entry["height"] > 0,
+                f"video boyutu Telegram'a iletilmedi: {video_entry}",
+            )
+            check(
+                video_entry.get("thumbnail") is not None,
+                "video onizlemesi Telegram'a iletilmedi",
+            )
         check(
             any(c[0] == "delete_message" for c in bot.calls[mark:]),
             "durum mesaji silinmedi",

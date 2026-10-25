@@ -13,9 +13,11 @@ Kural:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
 import uuid
+from typing import Awaitable, Callable
 from urllib.parse import urlparse
 
 from aiogram import Bot, F, Router
@@ -32,7 +34,7 @@ from ..database import Database
 from ..downloader import DownloadError, Downloader, MediaInfo
 from ..gallery import GalleryDownloader
 from ..keyboards import media_keyboard
-from ..queue import Job, JobQueue, QueueFullError
+from ..queue import Job, JobQueue, QueueFullError, cached_video_kwargs
 from ..utils import (
     UNSUPPORTED_URL_TEXT,
     escape,
@@ -232,14 +234,57 @@ async def _probe_gallery(
 ) -> list[dict] | None:
     if gallery is None or not gallery.available:
         return None
-    try:
-        items = await asyncio.wait_for(
-            asyncio.to_thread(gallery.probe, url), timeout=PROBE_TIMEOUT
-        )
-    except Exception:  # noqa: BLE001
-        log.exception("gallery-dl kesif hatasi: %s", url)
-        return None
-    return items or None
+    for attempt in range(2):
+        try:
+            items = await asyncio.wait_for(
+                asyncio.to_thread(gallery.probe, url), timeout=PROBE_TIMEOUT
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            if attempt == 0:
+                log.warning("gallery-dl kesif hatasi, tekrar denenecek: %s", url)
+                await asyncio.sleep(1)
+                continue
+            log.error("gallery-dl kesif hatasi: %s (%s)", url, exc)
+            return None
+        return items or None
+    return None
+
+
+async def _probe_downloader(
+    downloader: Downloader,
+    url: str,
+    on_retry: Callable[[], Awaitable[None]] | None = None,
+) -> MediaInfo:
+    """yt-dlp kesifini bir hata durumunda bir kez daha dener."""
+    for attempt in range(2):
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(downloader.probe, url), timeout=PROBE_TIMEOUT
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - hata tipi cagirana aynen iletilir
+            if (
+                isinstance(exc, DownloadError)
+                and str(exc) == UNSUPPORTED_URL_TEXT
+            ):
+                # Desteklenmeyen linkte tekrar denemenin anlami yok.
+                raise
+            if attempt == 0:
+                log.warning(
+                    "yt-dlp kesif hatasi, bir kez daha denenecek (%s): %s",
+                    url,
+                    exc,
+                )
+                if on_retry is not None:
+                    with contextlib.suppress(Exception):
+                        await on_retry()
+                await asyncio.sleep(1)
+                continue
+            raise
+    raise DownloadError("Bağlantı incelenemedi.")
 
 
 def _request_options(text: str, user: dict) -> tuple[int | None, bool]:
@@ -417,10 +462,18 @@ async def _process_text(
             gallery_items = await _probe_gallery(gallery, url)
             gallery_checked = True
 
+        async def _retry_notice() -> None:
+            await queue.edit_status(
+                chat_id,
+                status.message_id,
+                "🔁 <b>Bağlantı yeniden deneniyor…</b>",
+                wait=True,
+            )
+
         try:
             if gallery_items is None:
-                info = await asyncio.wait_for(
-                    asyncio.to_thread(downloader.probe, url), timeout=PROBE_TIMEOUT
+                info = await _probe_downloader(
+                    downloader, url, on_retry=_retry_notice
                 )
         except asyncio.TimeoutError:
             await queue.edit_status(
@@ -725,6 +778,7 @@ async def _resend_cached(bot: Bot, chat_id: int, row: dict, timeout: int) -> Non
             reply_markup=keyboard,
             supports_streaming=True,
             request_timeout=timeout,
+            **cached_video_kwargs(row),
         )
 
 

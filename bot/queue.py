@@ -37,6 +37,7 @@ from .database import Database
 from .downloader import DownloadError, Downloader
 from .gallery import VIDEO_EXT, GalleryDownloader, GalleryError
 from .keyboards import gallery_keyboard, media_keyboard
+from .media import VideoMeta, inspect_video
 from .status import (
     DEFAULT_EDIT_INTERVAL,
     DEFAULT_PROGRESS_INTERVAL,
@@ -66,6 +67,9 @@ class Job:
     as_document: bool = False
     status_header: str = ""
     status_stage: str = "queued"
+    video_width: int | None = None
+    video_height: int | None = None
+    video_duration: int | None = None
 
     @property
     def cache_preset(self) -> str:
@@ -244,6 +248,9 @@ class JobQueue:
             show_caption=job.show_caption,
             as_document=job.as_document,
             status_header=job.status_header,
+            video_width=job.video_width,
+            video_height=job.video_height,
+            video_duration=job.video_duration,
         )
         try:
             queued = await self.submit(new_job)
@@ -394,9 +401,38 @@ class JobQueue:
         try:
             await self._set_stage(job, "download", "⬇️ <b>İndiriliyor…</b>")
             ticker = asyncio.create_task(self._progress_loop(job, state))
-            path = await asyncio.to_thread(
-                self._downloader.download, job.url, job.preset, tmpdir, state
-            )
+            path: Path | None = None
+            for attempt in range(2):
+                attempt_dir = tmpdir / f"try-{attempt + 1}"
+                attempt_dir.mkdir(parents=True, exist_ok=True)
+                state.clear()
+                state.update({"status": "starting"})
+                try:
+                    path = await asyncio.to_thread(
+                        self._downloader.download,
+                        job.url,
+                        job.preset,
+                        attempt_dir,
+                        state,
+                    )
+                except Exception as exc:  # noqa: BLE001 - bir kez yeniden denenir
+                    if attempt == 0:
+                        log.warning(
+                            "Indirme basarisiz, bir kez daha denenecek (%s): %s",
+                            job.id,
+                            exc,
+                        )
+                        await self._set_stage(
+                            job,
+                            "download",
+                            "🔁 <b>İndirme başarısız. Tekrar deneniyor…</b>",
+                        )
+                        await asyncio.sleep(1)
+                        continue
+                    raise
+                break
+            if path is None:
+                raise DownloadError("İndirme tamamlanamadı.")
 
             await self._stop_ticker(ticker)
             ticker = None
@@ -423,6 +459,9 @@ class JobQueue:
                         job.title[:200],
                         job.platform,
                         size,
+                        job.video_width,
+                        job.video_height,
+                        job.video_duration,
                     )
                 except Exception:  # noqa: BLE001 - onbellek hatasi gonderimi bozmasin
                     log.exception("Onbellek yazilamadi: %s", job.id)
@@ -494,7 +533,43 @@ class JobQueue:
         total = 0
         try:
             await self._set_stage(job, "download", "🖼 <b>Medya indiriliyor…</b>")
-            files = await asyncio.to_thread(self._gallery.download, job.url, tmpdir)
+            files: list[Path] = []
+            for attempt in range(2):
+                attempt_dir = tmpdir / f"try-{attempt + 1}"
+                attempt_dir.mkdir(parents=True, exist_ok=True)
+                try:
+                    files = await asyncio.to_thread(
+                        self._gallery.download, job.url, attempt_dir
+                    )
+                except Exception as exc:  # noqa: BLE001 - bir kez yeniden denenir
+                    if attempt == 0:
+                        log.warning(
+                            "Galeri indirmesi basarisiz, bir kez daha denenecek (%s): %s",
+                            job.id,
+                            exc,
+                        )
+                        await self._set_stage(
+                            job,
+                            "download",
+                            "🔁 <b>Medya indirilemedi. Tekrar deneniyor…</b>",
+                        )
+                        await asyncio.sleep(1)
+                        continue
+                    raise
+                if not files and attempt == 0:
+                    log.warning(
+                        "Galeri bos dondu, bir kez daha denenecek (%s)", job.id
+                    )
+                    await self._set_stage(
+                        job,
+                        "download",
+                        "🔁 <b>Medya bulunamadı. Tekrar deneniyor…</b>",
+                    )
+                    await asyncio.sleep(1)
+                    continue
+                break
+            if not files:
+                raise GalleryError("Gönderi indirilemedi: medya bulunamadı")
             total = sum(path.stat().st_size for path in files)
             if total > self._settings.max_upload_bytes:
                 raise DownloadError(
@@ -570,9 +645,32 @@ class JobQueue:
 
         if len(files) == 1:
             path = files[0]
+            video_meta: VideoMeta | None = None
+            if path.suffix.lower() in VIDEO_EXT:
+                video_meta = await self._inspect_video(path)
             for chat_id, _ in self._targets(job):
                 file = FSInputFile(path, filename=path.name)
-                if path.suffix.lower() in VIDEO_EXT:
+                if video_meta is not None:
+                    video_kwargs: dict[str, Any] = {
+                        "width": video_meta.width,
+                        "height": video_meta.height,
+                        "duration": video_meta.duration,
+                    }
+                    if video_meta.thumbnail is not None:
+                        video_kwargs["thumbnail"] = FSInputFile(
+                            video_meta.thumbnail,
+                            filename=video_meta.thumbnail.name,
+                        )
+                    await self._bot.send_video(
+                        chat_id=chat_id,
+                        video=file,
+                        caption=caption,
+                        reply_markup=keyboard,
+                        supports_streaming=True,
+                        request_timeout=self._settings.upload_timeout_sec,
+                        **video_kwargs,
+                    )
+                elif path.suffix.lower() in VIDEO_EXT:
                     await self._bot.send_video(
                         chat_id=chat_id,
                         video=file,
@@ -597,9 +695,27 @@ class JobQueue:
                 file = FSInputFile(path, filename=path.name)
                 item_caption = caption if index == 0 else None
                 if path.suffix.lower() in VIDEO_EXT:
+                    video_meta = await self._inspect_video(path)
+                    video_kwargs = {}
+                    if video_meta is not None:
+                        video_kwargs.update(
+                            {
+                                "width": video_meta.width,
+                                "height": video_meta.height,
+                                "duration": video_meta.duration,
+                            }
+                        )
+                        if video_meta.thumbnail is not None:
+                            video_kwargs["thumbnail"] = FSInputFile(
+                                video_meta.thumbnail,
+                                filename=video_meta.thumbnail.name,
+                            )
                     media.append(
                         InputMediaVideo(
-                            media=file, caption=item_caption, parse_mode=ParseMode.HTML
+                            media=file,
+                            caption=item_caption,
+                            parse_mode=ParseMode.HTML,
+                            **video_kwargs,
                         )
                     )
                 else:
@@ -652,6 +768,7 @@ class JobQueue:
                     reply_markup=keyboard,
                     supports_streaming=True,
                     request_timeout=self._settings.upload_timeout_sec,
+                    **cached_video_kwargs(row, job.duration),
                 )
 
     async def _send(self, job: Job, path: Path) -> tuple[str | None, str]:
@@ -672,17 +789,38 @@ class JobQueue:
             else gallery_keyboard(job.source_url)
         )
 
+        video_meta: VideoMeta | None = None
+        if not is_audio and not job.as_document and path.suffix.lower() in VIDEO_EXT:
+            video_meta = await self._inspect_video(path)
+            if video_meta is not None:
+                job.video_width = video_meta.width
+                job.video_height = video_meta.height
+                job.video_duration = video_meta.duration
+
         cached_file_id: str | None = None
         cached_media_type = "video"
         for index, (chat_id, _) in enumerate(self._targets(job)):
             file = FSInputFile(path, filename=path.name)
             msg, media_type = await self._send_file(
-                job, file, chat_id, caption, keyboard, is_audio
+                job,
+                file,
+                chat_id,
+                caption,
+                keyboard,
+                is_audio,
+                video_meta=video_meta,
             )
             if index == 0:
                 cached_file_id = _file_id(msg, media_type)
                 cached_media_type = media_type
         return cached_file_id, cached_media_type
+
+    async def _inspect_video(self, path: Path) -> VideoMeta | None:
+        try:
+            return await asyncio.to_thread(inspect_video, path, path.parent)
+        except Exception:  # noqa: BLE001 - metadata gonderimi durdurmasin
+            log.exception("Video metadata okunamadi: %s", path)
+            return None
 
     async def _send_file(
         self,
@@ -692,6 +830,8 @@ class JobQueue:
         caption: str | None,
         keyboard: Any,
         is_audio: bool,
+        *,
+        video_meta: VideoMeta | None = None,
     ) -> tuple[Message, str]:
         for attempt in range(2):
             try:
@@ -717,14 +857,28 @@ class JobQueue:
                     )
                     return msg, "audio"
 
+                video_kwargs: dict[str, Any] = {}
+                if video_meta is not None:
+                    video_kwargs["width"] = video_meta.width
+                    video_kwargs["height"] = video_meta.height
+                    video_kwargs["duration"] = (
+                        video_meta.duration or job.duration or 0
+                    )
+                    if video_meta.thumbnail is not None:
+                        video_kwargs["thumbnail"] = FSInputFile(
+                            video_meta.thumbnail,
+                            filename=video_meta.thumbnail.name,
+                        )
+                else:
+                    video_kwargs["duration"] = job.duration or 0
                 msg = await self._bot.send_video(
                     chat_id=chat_id,
                     video=file,
                     caption=caption,
-                    duration=job.duration or 0,
                     supports_streaming=True,
                     reply_markup=keyboard,
                     request_timeout=self._settings.upload_timeout_sec,
+                    **video_kwargs,
                 )
                 return msg, "video"
             except TelegramRetryAfter as exc:
@@ -929,6 +1083,21 @@ class JobQueue:
         """Basarili gonderimden sonra durum mesajini siler."""
         for chat_id, message_id in self._targets(job):
             await self._status.delete(chat_id, message_id)
+
+
+def cached_video_kwargs(
+    row: dict[str, Any], fallback_duration: int | None = None
+) -> dict[str, int]:
+    """Onbellekteki video kaydindan Telegram boyut/sure parametreleri."""
+    kwargs: dict[str, int] = {}
+    for key in ("width", "height"):
+        value = row.get(key)
+        if isinstance(value, int) and value > 0:
+            kwargs[key] = value
+    duration = row.get("duration") or fallback_duration
+    if isinstance(duration, int) and duration > 0:
+        kwargs["duration"] = duration
+    return kwargs
 
 
 def _file_id(message: Message, kind: str) -> str | None:

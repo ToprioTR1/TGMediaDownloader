@@ -59,6 +59,9 @@ CREATE TABLE IF NOT EXISTS media_cache (
     title       TEXT,
     platform    TEXT,
     filesize    INTEGER NOT NULL DEFAULT 0,
+    width       INTEGER,
+    height      INTEGER,
+    duration    INTEGER,
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -94,23 +97,49 @@ class Database:
         await self._conn.commit()
         log.info("Veritabani hazir: %s", self._path)
 
-    async def _migrate(self) -> None:
-        """Eski veritabanlarina yeni kolonlari ekler."""
-        async with self.conn.execute("PRAGMA table_info(users)") as cur:
+    async def _add_columns(
+        self, table: str, new_columns: dict[str, str]
+    ) -> None:
+        async with self.conn.execute(f"PRAGMA table_info({table})") as cur:
             columns = {row["name"] for row in await cur.fetchall()}
-
-        new_columns = {
-            "is_promoted": "INTEGER NOT NULL DEFAULT 0",
-            "default_quality": "INTEGER NOT NULL DEFAULT 0",
-            "audio_default": "INTEGER NOT NULL DEFAULT 0",
-            "show_caption": "INTEGER NOT NULL DEFAULT 1",
-        }
         for name, definition in new_columns.items():
             if name not in columns:
                 await self.conn.execute(
-                    f"ALTER TABLE users ADD COLUMN {name} {definition}"
+                    f"ALTER TABLE {table} ADD COLUMN {name} {definition}"
                 )
-                log.info("users.%s kolonu eklendi", name)
+                log.info("%s.%s kolonu eklendi", table, name)
+
+    async def _migrate(self) -> None:
+        """Eski veritabanlarina yeni kolonlari ekler."""
+        await self._add_columns(
+            "users",
+            {
+                "is_promoted": "INTEGER NOT NULL DEFAULT 0",
+                "default_quality": "INTEGER NOT NULL DEFAULT 0",
+                "audio_default": "INTEGER NOT NULL DEFAULT 0",
+                "show_caption": "INTEGER NOT NULL DEFAULT 1",
+            },
+        )
+        await self._add_columns(
+            "media_cache",
+            {
+                "width": "INTEGER",
+                "height": "INTEGER",
+                "duration": "INTEGER",
+            },
+        )
+        # Bu surumden once kaydedilen videolarda width/height yok. Telegram'da
+        # kare gorunmemeleri icin bir kez yeniden indirilmeleri gerekir.
+        async with self.conn.execute(
+            "DELETE FROM media_cache "
+            "WHERE media_type = 'video' AND (width IS NULL OR height IS NULL)"
+        ) as cur:
+            stale_videos = cur.rowcount
+        if stale_videos:
+            log.info(
+                "Boyut bilgisi olmayan %s eski video onbellegi temizlendi",
+                stale_videos,
+            )
 
     async def close(self) -> None:
         if self._conn is not None:
@@ -342,21 +371,40 @@ class Database:
         title: str | None,
         platform: str | None,
         filesize: int,
+        width: int | None = None,
+        height: int | None = None,
+        duration: int | None = None,
     ) -> None:
         async with self._write_lock:
             await self.conn.execute(
                 """
                 INSERT INTO media_cache
-                    (cache_key, url, preset, file_id, media_type, title, platform, filesize)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    (cache_key, url, preset, file_id, media_type, title, platform,
+                     filesize, width, height, duration)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(cache_key) DO UPDATE SET
                     file_id    = excluded.file_id,
                     title      = excluded.title,
                     platform   = excluded.platform,
                     filesize   = excluded.filesize,
+                    width      = excluded.width,
+                    height     = excluded.height,
+                    duration   = excluded.duration,
                     created_at = datetime('now')
                 """,
-                (cache_key, url, preset, file_id, media_type, title, platform, filesize),
+                (
+                    cache_key,
+                    url,
+                    preset,
+                    file_id,
+                    media_type,
+                    title,
+                    platform,
+                    filesize,
+                    width,
+                    height,
+                    duration,
+                ),
             )
             await self.conn.commit()
 

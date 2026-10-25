@@ -18,7 +18,12 @@ ile yazıldı, Docker ile çalışacak şekilde hazırlandı.
 - 📄 `dosya` / `belge` / `file` / `fl` yazarak medyayı Telegram dosyası olarak gönderme
 - ⚡️ `file_id` önbelleği: aynı video tekrar istenirse yeniden indirilmeden anında gönderilir
 - 🧵 Aynı link indirilirken tekrar gönderilirse ikinci indirme veya durum mesajı açılmaz
-- 🔁 Başarısız indirmelerde `Yeniden dene` butonu; tekrar deneme mevcut hata mesajını düzenler
+- 🔁 Bağlantı inceleme veya indirme hata verirse bir kez otomatik tekrar denenir;
+  yine olmazsa normal hata mesajı ve `Yeniden dene` butonu gösterilir. Tekrar
+  deneme mevcut hata mesajını düzenler
+- 📐 Telegram'da doğru en-boy oranı: her videoyla birlikte gerçek genişlik,
+  yükseklik, süre ve küçük bir JPEG önizleme gönderilir; büyük videolar kare
+  kutucuk olarak görünmez
 - ⚙️ `/ayar` ile kişisel varsayılanlar: kalite, ses tercihi, caption
 - 🔘 Videoların altında `🔗 Kaynak` · `🎵 Ses olarak al` butonları
 - 📝 Medya açıklamasındaki (caption) ve yanıtlanan mesajdaki bağlantılar da işlenir
@@ -379,6 +384,7 @@ bot/
 ├── database.py      # SQLite: kullanıcılar, indirmeler, file_id önbelleği
 ├── downloader.py    # yt-dlp: probe (metadata + boyut tahmini) + indirme
 ├── gallery.py       # gallery-dl: Instagram/TikTok fotoğraf indirme
+├── media.py         # ffprobe metadata + Telegram JPEG önizlemesi
 ├── queue.py         # iş kuyruğu, işçiler, ilerleme, önbellek, Telegram gönderimi
 ├── keyboards.py     # inline klavyeler (video aksiyonları, admin paneli)
 ├── middlewares.py   # kullanıcı kaydı
@@ -391,8 +397,9 @@ bot/
 
 Akış: `handlers/download.py` → `downloader.probe()` →
 `handlers/download.py:_resolve_preset()` (en yakın kalite + boyut koruması) →
-`queue.JobQueue.submit()` → işçi `downloader.download()` → `bot.send_video()`
-→ `database.cache_put()` + `database.record_download()`.
+`queue.JobQueue.submit()` → işçi `downloader.download()` →
+`media.inspect_video()` (boyut + önizleme) → `bot.send_video()` →
+`database.cache_put()` + `database.record_download()`.
 Instagram ve TikTok fotoğraf gönderilerinde yt-dlp başarısız olursa
 `gallery.py` devreye girer.
 
@@ -401,11 +408,11 @@ Instagram ve TikTok fotoğraf gönderilerinde yt-dlp başarısız olursa
 `tests/smoke_test.py` sahte bir Bot nesnesiyle uçtan uca akışı dener (gerçek
 ağdan küçük bir TikTok videosu indirir; varsayılan/istenen kalite, MP3, dosya
 olarak gönderim, file_id önbelleği, aynı linkin tekilleştirilmesi, yeniden deneme
-sahipliği, günlük limit, caption ve yanıt desteği, boyut koruması, gallery-dl ile
-fotoğraf gönderimi (belge modu dahil), `/ayar`, geçici dosya temizliği,
-SSRF/özel adres engeli, durum mesajlarının birleştirilmesi, `RetryAfter`, geçici
-ağ hataları, başarılı gönderimin korunması ve DB/admin/önbellek adımlarını
-kontrol eder):
+sahipliği, günlük limit, caption ve yanıt desteği, boyut koruması, videonun
+genişlik/yükseklik/önizleme bilgisiyle gönderilmesi, gallery-dl ile fotoğraf
+gönderimi (belge modu dahil), `/ayar`, geçici dosya temizliği, SSRF/özel adres
+engeli, durum mesajlarının birleştirilmesi, `RetryAfter`, geçici ağ hataları,
+başarılı gönderimin korunması ve DB/admin/önbellek adımlarını kontrol eder):
 
 ```bash
 pip install -r requirements.txt
@@ -415,6 +422,9 @@ PYTHONPATH=. python tests/smoke_test.py             # bash
 python -m unittest tests.test_netguard -v           # SSRF/connect regresyon testleri
 python -m unittest tests.test_url_support -v        # yt-dlp URL eşleştirme testleri
 python -m unittest tests.test_instagram_embed -v    # Instagram embed ayrıştırma testleri
+python -m unittest tests.test_media -v              # ffprobe/önizleme testleri (ffmpeg gerekir)
+python -m unittest tests.test_retry -v              # tek otomatik tekrar testleri
+python -m unittest tests.test_database_migration -v # eski önbellek taşıma testleri
 ```
 
 Duman testi kendi verisini `.tmp/` altında oluşturur ve Telegram'a gerçek istek
@@ -454,10 +464,19 @@ kullanır ve ağ isteği yapmaz.
   aralıklarla yeniden denenir. Başarılı gönderimden sonra durum mesajı silinir;
   sohbette sadece gönderilen medya kalır. Hata durumunda mesaj açıklama ve
   yeniden deneme butonuyla birlikte kalır.
+- Bağlantı inceleme, video indirme ve galeri indirme işlemleri hata verirse bir
+  kez otomatik tekrar denenir. İkinci hata normal hata mesajını ve manuel
+  `Yeniden dene` butonunu gösterir. Desteklenmeyen linkler yine sessizce yok
+  sayılır ve tekrar denenmez.
 - Medya yüklemeleri `UPLOAD_TIMEOUT_SEC` kullanır (varsayılan 600 saniye).
   Telegram zamanında yanıt vermezse bot dosyayı otomatik olarak **tekrar
   göndermez**; çünkü dosya çoktan ulaşmış olabilir ve tekrar deneme kopya
   oluşturabilir. Bunun yerine "Gönderim yanıtı alınamadı" uyarısı gösterilir.
+  Telegram flood (`RetryAfter`) yanıtları eskisi gibi bir kez tekrar denenir.
+- Videolar `width`, `height`, `duration` ve ffmpeg ile üretilen JPEG önizleme
+  bilgisiyle gönderilir. Bu, özellikle yaklaşık 10 MB'tan büyük dosyalarda
+  Telegram'daki en-boy oranını korur. ffprobe/ffmpeg yoksa bot eski davranışa
+  döner.
 - Instagram fotoğraf/carousel ve TikTok fotoğraf gönderileri gallery-dl ile
   indirilir; video içeren gönderilerde kalite seçimi için yt-dlp kullanılır.
   Instagram gallery-dl'yi giriş sayfasına yönlendirirse herkese açık
@@ -467,6 +486,9 @@ kullanır ve ağ isteği yapmaz.
   Telegram dosyayı reddederse önbellek otomatik temizlenir ve yeniden indirilir.
   Eski kayıtlar açılışta budanır; adminler `/cache` ile önbelleği inceleyebilir,
   budayabilir veya temizleyebilir. Tüm kayıtları silmek açık onay gerektirir.
+  En-boy oranı düzeltmesinden önce oluşturulan video kayıtlarında boyut bilgisi
+  yoktur; bu kayıtlar açılışta bir kez silinip doğru geometriyle yeniden
+  indirilir. Ses ve belge kayıtları korunur.
 - Canlı yayınlar desteklenmez.
 - Bu botu yalnızca indirmeye hakkınız olan içerikler ve platformların kullanım
   koşullarına uygun şekilde kullanın. Sorumluluk kullanıcıya aittir.
