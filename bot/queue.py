@@ -43,6 +43,8 @@ from .qol import (
     error_category,
     error_hint,
     media_buttons,
+    quota_error_text,
+    quota_warning_text,
     retry_keyboard,
     video_label,
 )
@@ -140,6 +142,10 @@ class DailyLimitError(QueueFullError):
     """Kullanicinin gunluk indirme hakki doldu."""
 
 
+class MonthlyQuotaError(QueueFullError):
+    """Sunucunun aylik trafik kotasi doldu."""
+
+
 class JobQueue:
     def __init__(
         self,
@@ -212,6 +218,34 @@ class JobQueue:
 
     def pending_for(self, user_id: int) -> int:
         return self._pending[user_id]
+
+    async def monthly_quota_error(self) -> str | None:
+        """Aylik trafik kotasi dolduysa kullaniciya gosterilecek metin."""
+        limit = getattr(self._settings, "monthly_traffic_gb", 0)
+        if not limit:
+            return None
+        report = await self._db.bandwidth_month()
+        return quota_error_text(report["total"], limit)
+
+    async def _warn_quota(self) -> None:
+        """Kota esiklerinde adminlere ayda bir kez haber verir."""
+        limit = getattr(self._settings, "monthly_traffic_gb", 0)
+        if not limit:
+            return
+        report = await self._db.bandwidth_month()
+        used = int(report["total"])
+        limit_bytes = int(limit) * 1024**3
+        month = time.strftime("%Y-%m")
+        for percent in (80, 100):
+            if used < limit_bytes * percent / 100:
+                continue
+            key = f"quota_warn:{month}:{percent}"
+            if not await self._db.state_set_once(key, str(used)):
+                continue
+            text = quota_warning_text(used, limit, percent)
+            for admin_id in getattr(self._settings, "admin_ids", frozenset()):
+                with contextlib.suppress(Exception):
+                    await self._bot.send_message(admin_id, text)
 
     @property
     def queued_count(self) -> int:
@@ -379,6 +413,10 @@ class JobQueue:
                     "Aynı anda en fazla "
                     f"{self._settings.max_queue_per_user} indirme sıraya alabilirsiniz."
                 )
+
+            quota = await self.monthly_quota_error()
+            if quota:
+                raise MonthlyQuotaError(quota)
 
             if (
                 self._settings.daily_limit
@@ -1340,6 +1378,8 @@ class JobQueue:
         await self._record(
             job, "ok", filesize, preset=preset, bytes_in=bytes_in or 0
         )
+        with contextlib.suppress(Exception):
+            await self._warn_quota()
         try:
             await self._delete(job)
         except Exception:  # noqa: BLE001 - gonderim zaten basarili

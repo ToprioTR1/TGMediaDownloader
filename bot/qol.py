@@ -184,6 +184,34 @@ def retry_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def quota_error_text(used_bytes: int, limit_gb: int) -> str | None:
+    """Aylik kota dolduysa kullaniciya gosterilecek metni dondurur."""
+    if not limit_gb:
+        return None
+    limit_bytes = int(limit_gb) * 1024**3
+    if used_bytes < limit_bytes:
+        return None
+    return (
+        f"📶 Aylık trafik kotası doldu ({human_size(used_bytes)} / "
+        f"{limit_gb} GB). Yeni indirmeler admin kotayı artırana kadar durduruldu."
+    )
+
+
+def quota_warning_text(used_bytes: int, limit_gb: int, percent: int) -> str:
+    """Adminlere gonderilecek kota uyarisi."""
+    used_gb = used_bytes / (1024**3)
+    head = (
+        "⚠️ Aylık trafik kotası doldu."
+        if percent >= 100
+        else f"⚠️ Aylık trafik kotasının %{percent}'ine ulaşıldı."
+    )
+    return (
+        f"{head}\n"
+        f"Kullanım: <b>{used_gb:.2f} / {limit_gb} GB</b>\n"
+        "Kota dolduğunda yeni indirmeler durdurulur."
+    )
+
+
 def error_hint(
     category: str, *, max_upload_mb: int, detail: str | None = None
 ) -> str:

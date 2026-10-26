@@ -46,6 +46,7 @@ from ..qol import (
     playlist_menu,
     playlist_summary,
     quality_menu,
+    quota_error_text,
     retry_keyboard,
     size_hint_for_estimate,
     video_label,
@@ -298,6 +299,13 @@ async def _limit_error(
     pending = queue.pending_for(user_id)
     if pending >= settings.max_queue_per_user:
         return "🧵 Kuyruğunuz dolu. Mevcut indirmeler bitince tekrar deneyin."
+    if getattr(settings, "monthly_traffic_gb", 0):
+        month = await db.bandwidth_month()
+        quota = quota_error_text(
+            month["total"], settings.monthly_traffic_gb
+        )
+        if quota:
+            return quota
     if settings.daily_limit and not await db.is_promoted(user_id):
         used = await db.count_downloads_today(user_id)
         if used + pending >= settings.daily_limit:

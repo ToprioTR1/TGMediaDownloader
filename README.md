@@ -37,6 +37,8 @@ Built with Python 3.12 + [aiogram 3](https://github.com/aiogram/aiogram) +
   quality, sending as a file, or opening the source, with a one-line hint
 - 🕒 Queue position (`🕒 2/3`) and a `❌ Cancel` button while a job is waiting
   or downloading
+- 📶 Admin bandwidth report (`/bandwidth`) with monthly/daily traffic and an
+  optional monthly quota that warns at 80% and stops new downloads at 100%
 - 📚 Playlist support: a playlist link first asks how many videos to queue
   (first few / more / all as MP3), then processes them one by one
 - 📝 Links in media captions and in replied-to messages are processed too
@@ -168,6 +170,7 @@ All settings are read from `.env` ([bot/config.py](bot/config.py)):
 | `CACHE_DAYS` | `30` | `file_id` cache lifetime in days (0 = disabled) |
 | `GALLERY_ENABLED` | `1` | Instagram/TikTok/Pinterest photo support (gallery-dl) |
 | `GALLERY_LIMIT` | `10` | Maximum media per post (Telegram album limit is 10) |
+| `MONTHLY_TRAFFIC_GB` | `0` | Monthly traffic quota in GB (0 = disabled) |
 | `AUTO_UPDATE_YTDLP` | `1` | Update yt-dlp + gallery-dl on Docker startup |
 | `COOKIES_FILE` | — | Path to `cookies.txt` (for sites that require cookies) |
 | `TELEGRAM_API_URL` | empty | Local Bot API server URL (its host is allowlisted automatically) |
@@ -470,6 +473,11 @@ make no network requests.
 
 ## Notes
 
+- Admins can use `/bandwidth` (or the panel button) to see monthly upload and
+  download totals plus a per-day breakdown. When `MONTHLY_TRAFFIC_GB` is set,
+  admins get one warning at 80% and one at 100% per month; at 100% new jobs are
+  refused until the quota is raised (running jobs finish normally). Quota usage
+  counts upload + download.
 - Videos are kept in a `dl-*` temporary directory and deleted after sending; they
   do not accumulate on the server. Leftover `dl-*` entries older than 6 hours are
   removed by a janitor every 30 minutes; other files in `DOWNLOAD_DIR` are left

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from bot.downloader import Downloader, MediaInfo
+from bot.database import Database
 from bot.qol import (
     CATEGORY_ACCESS,
     CATEGORY_SIZE,
@@ -15,11 +16,13 @@ from bot.qol import (
     playlist_menu,
     playlist_summary,
     quality_menu,
+    quota_error_text,
+    quota_warning_text,
     retry_keyboard,
     video_codec_label,
     video_label,
 )
-from bot.queue import Job, JobQueue
+from bot.queue import Job, JobQueue, MonthlyQuotaError
 
 
 def _info(**overrides) -> MediaInfo:
@@ -286,6 +289,7 @@ class PlaylistProbeTests(unittest.TestCase):
 class _FakeBot:
     def __init__(self) -> None:
         self.edits: list[dict] = []
+        self.messages: list[str] = []
 
     async def edit_message_text(self, **kwargs):
         self.edits.append(kwargs)
@@ -293,7 +297,11 @@ class _FakeBot:
     async def delete_message(self, **kwargs):
         return True
 
-    async def send_message(self, **kwargs):
+    async def send_message(self, *args, **kwargs):
+        text = kwargs.get("text")
+        if text is None and len(args) > 1:
+            text = args[1]
+        self.messages.append(text or "")
         return SimpleNamespace(message_id=1)
 
 
@@ -440,6 +448,114 @@ class _CaptureBot:
     async def send_message(self, **kwargs):
         self.messages += 1
         return SimpleNamespace(message_id=1)
+
+
+class QuotaTextTests(unittest.TestCase):
+    def test_error_text_only_when_full(self) -> None:
+        self.assertIsNone(quota_error_text(0, 0))
+        self.assertIsNone(quota_error_text(1 * 1024**3, 2))
+        text = quota_error_text(2 * 1024**3, 2)
+        assert text is not None
+        self.assertIn("doldu", text)
+        self.assertIn("2 GB", text)
+
+    def test_warning_texts(self) -> None:
+        self.assertIn("%80", quota_warning_text(int(0.8 * 1024**3), 1, 80))
+        self.assertIn("doldu", quota_warning_text(1024**3, 1, 100))
+
+
+class MonthlyQuotaTests(unittest.IsolatedAsyncioTestCase):
+    async def _setup(self, raw: str, used_mb: int):
+        db = Database(Path(raw) / "bot.db")
+        await db.connect()
+        # Toplam trafik = upload + download.
+        await db.record_download(
+            42,
+            "https://example.com/quota",
+            "YouTube",
+            "h:720",
+            "ok",
+            used_mb * 1024 * 1024 // 2,
+            used_mb * 1024 * 1024 // 2,
+        )
+        settings = SimpleNamespace(
+            concurrency=1,
+            download_dir=Path(raw),
+            max_queue_per_user=5,
+            daily_limit=0,
+            cache_days=0,
+            max_upload_bytes=50 * 1024 * 1024,
+            max_upload_mb=50,
+            upload_timeout_sec=30,
+            gallery_enabled=False,
+            playlist_limit=5,
+            playlist_max_total_sec=1800,
+            monthly_traffic_gb=1,
+            admin_ids=frozenset({42}),
+        )
+        bot = _FakeBot()
+        queue = JobQueue(bot, db, settings, SimpleNamespace())  # type: ignore[arg-type]
+        return db, bot, queue
+
+    async def test_submit_is_blocked_when_quota_is_full(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="quota-") as raw:
+            db, _bot, queue = await self._setup(raw, used_mb=1200)
+            try:
+                job = Job(
+                    id="q1",
+                    user_id=42,
+                    chat_id=42,
+                    status_message_id=1,
+                    url="https://example.com/q1",
+                    preset="h:720",
+                    title="Test",
+                    platform="YouTube",
+                )
+                with self.assertRaises(MonthlyQuotaError):
+                    await queue.submit(job)
+            finally:
+                await db.close()
+
+    async def test_warning_is_sent_once_per_threshold(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="quota-") as raw:
+            db, bot, queue = await self._setup(raw, used_mb=1200)
+            try:
+                await queue._warn_quota()
+                await queue._warn_quota()
+                self.assertEqual(len(bot.messages), 2)
+                self.assertTrue(any("%80" in m for m in bot.messages))
+                self.assertTrue(any("doldu" in m for m in bot.messages))
+            finally:
+                await db.close()
+
+    async def test_no_warning_below_threshold(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="quota-") as raw:
+            db, bot, queue = await self._setup(raw, used_mb=500)
+            try:
+                await queue._warn_quota()
+                self.assertEqual(bot.messages, [])
+            finally:
+                await db.close()
+
+    async def test_limit_error_reports_quota(self) -> None:
+        from bot.handlers.download import _limit_error
+
+        with tempfile.TemporaryDirectory(prefix="quota-") as raw:
+            db, _bot, _queue = await self._setup(raw, used_mb=1200)
+            try:
+                settings = SimpleNamespace(
+                    max_queue_per_user=5,
+                    daily_limit=0,
+                    monthly_traffic_gb=1,
+                )
+                queue = SimpleNamespace(pending_for=lambda _uid: 0)
+                error = await _limit_error(
+                    42, db, settings, queue  # type: ignore[arg-type]
+                )
+                assert error is not None
+                self.assertIn("kota", error.lower())
+            finally:
+                await db.close()
 
 
 if __name__ == "__main__":

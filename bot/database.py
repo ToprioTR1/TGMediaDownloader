@@ -71,6 +71,12 @@ CREATE TABLE IF NOT EXISTS media_cache (
 );
 
 CREATE INDEX IF NOT EXISTS idx_media_cache_url ON media_cache(url);
+
+CREATE TABLE IF NOT EXISTS app_state (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 
@@ -375,6 +381,44 @@ class Database:
         ) as cur:
             rows = await cur.fetchall()
         return [(row["p"], int(row["c"])) for row in rows]
+
+    async def bandwidth_month(self) -> dict[str, int]:
+        """Bu ayin (yerel ay basi) toplam trafigi.
+
+        `total`, upload + download toplamidir; kota bu degeri kullanir.
+        """
+        async with self.conn.execute(
+            "SELECT COALESCE(SUM(filesize), 0) AS out_bytes, "
+            "COALESCE(SUM(bytes_in), 0) AS in_bytes, COUNT(*) AS jobs "
+            "FROM downloads "
+            "WHERE created_at >= datetime('now', 'localtime', 'start of month', 'utc')"
+        ) as cur:
+            row = await cur.fetchone()
+        out_bytes = int(row["out_bytes"] or 0) if row else 0
+        in_bytes = int(row["in_bytes"] or 0) if row else 0
+        return {
+            "bytes_out": out_bytes,
+            "bytes_in": in_bytes,
+            "total": out_bytes + in_bytes,
+            "jobs": int(row["jobs"] or 0) if row else 0,
+        }
+
+    async def state_set_once(self, key: str, value: str) -> bool:
+        """Anahtar yoksa yazar; ilk yazimda True doner (uyari spamini onler)."""
+        async with self._write_lock:
+            cur = await self.conn.execute(
+                "INSERT OR IGNORE INTO app_state(key, value) VALUES(?, ?)",
+                (key, value),
+            )
+            await self.conn.commit()
+        return cur.rowcount > 0
+
+    async def state_get(self, key: str) -> str | None:
+        async with self.conn.execute(
+            "SELECT value FROM app_state WHERE key = ?", (key,)
+        ) as cur:
+            row = await cur.fetchone()
+        return str(row["value"]) if row else None
 
     # ------------------------------------------------------------ bant genisligi
 

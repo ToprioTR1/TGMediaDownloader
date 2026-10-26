@@ -33,6 +33,8 @@ ile yazıldı, Docker ile çalışacak şekilde hazırlandı.
 - 🧠 Akıllı hatalar: hataya göre yeniden dene, daha düşük kalite, dosya olarak
   gönder veya kaynağı aç butonu ve tek satırlık bir öneri
 - 🕒 Kuyruk sırası (`🕒 2/3`) ve iş beklerken/indirilirken `❌ İptal` butonu
+- 📶 Admin bant genişliği raporu (`/bandwidth`) ile aylık/günlük trafik ve
+  isteğe bağlı aylık kota: %80'de uyarı, %100'de yeni indirmeleri durdurma
 - 📚 Oynatma listesi desteği: liste bağlantısında önce kaç video indirileceği
   sorulur (ilk birkaç / daha fazla / hepsi MP3), sonra tek tek işlenir
 - 📝 Medya açıklamasındaki (caption) ve yanıtlanan mesajdaki bağlantılar da işlenir
@@ -162,6 +164,7 @@ Tüm ayarlar `.env` üzerinden okunur ([bot/config.py](bot/config.py)):
 | `CACHE_DAYS` | `30` | `file_id` önbellek süresi, gün (0 = kapalı) |
 | `GALLERY_ENABLED` | `1` | Instagram/TikTok/Pinterest fotoğraf desteği (gallery-dl) |
 | `GALLERY_LIMIT` | `10` | Gönderi başına en fazla medya (Telegram albüm limiti 10) |
+| `MONTHLY_TRAFFIC_GB` | `0` | Aylık trafik kotası, GB (0 = kapalı) |
 | `AUTO_UPDATE_YTDLP` | `1` | Docker açılışında yt-dlp + gallery-dl güncelle |
 | `COOKIES_FILE` | — | `cookies.txt` yolu (çerez gereken siteler için) |
 | `TELEGRAM_API_URL` | boş | Yerel Bot API sunucusu adresi (host'u otomatik izin listesine eklenir) |
@@ -460,6 +463,11 @@ kullanır ve ağ isteği yapmaz.
 
 ## Notlar
 
+- Adminler `/bandwidth` (veya panel butonu) ile aylık upload/download toplamını
+  ve günlük dökümü görebilir. `MONTHLY_TRAFFIC_GB` ayarlıysa %80'de bir,
+  %100'de bir kez admin uyarısı gider; %100'de kota artırılana kadar yeni işler
+  reddedilir (çalışan işler normal biter). Kota kullanımı upload + download
+  toplamıdır.
 - Videolar `dl-*` geçici klasöründe tutulur ve gönderimden sonra silinir;
   sunucuda birikmez. 6 saatten eski artık `dl-*` girdileri 30 dakikada bir çalışan
   temizlik göreviyle silinir; `DOWNLOAD_DIR` içindeki diğer dosyalara dokunulmaz.
