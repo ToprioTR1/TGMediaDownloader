@@ -442,6 +442,8 @@ def render_job_status(
 
     if stage == "queued":
         lines.extend(["✅ Bağlantı incelendi", "⏳ Sırada…"])
+    elif stage == "cancelled":
+        lines.append(detail or "🚫 İptal edildi.")
     elif stage == "cached":
         lines.extend(["⚡️ Önbellekten hazır", detail or "📤 Gönderiliyor…"])
     elif stage == "download":

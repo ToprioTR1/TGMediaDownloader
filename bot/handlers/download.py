@@ -964,6 +964,20 @@ async def on_action(
         return
 
     _, action, key = parts
+
+    if action == "cancel":
+        state = await queue.cancel(
+            key, callback.message.chat.id, callback.from_user.id
+        )
+        await callback.answer(
+            {
+                "cancelled": "İptal edildi 🚫",
+                "already": "Bu iş zaten iptal edildi.",
+            }.get(state, "İş bulunamadı veya size ait değil."),
+            show_alert=state == "missing",
+        )
+        return
+
     row = await db.cache_get_by_key(key)
     if row is None:
         await callback.answer(

@@ -35,6 +35,7 @@ Built with Python 3.12 + [aiogram 3](https://github.com/aiogram/aiogram) +
 - 🧠 Smart errors: depending on the failure the card offers retry, a lower
   quality, sending as a file, or opening the source, with a one-line hint
 - 🕒 Queue position (`🕒 2/3`) so you can see where a waiting download is
+- ❌ `Cancel` button while a job is waiting or downloading
 - 📝 Links in media captions and in replied-to messages are processed too
 - 🚦 Only URLs matched by a yt-dlp site extractor (or a site's official
   short-link host) are processed; generic web pages are ignored locally
@@ -440,7 +441,7 @@ python -m unittest tests.test_instagram_embed -v    # Instagram embed parser tes
 python -m unittest tests.test_media -v              # ffprobe/thumbnail tests (ffmpeg required)
 python -m unittest tests.test_retry -v              # one-retry behavior tests
 python -m unittest tests.test_database_migration -v # old cache migration tests
-python -m unittest tests.test_qol -v                # action buttons, smart errors and queue
+python -m unittest tests.test_qol -v                # buttons, smart errors, queue and cancel
 ```
 
 The smoke test creates its own data under `.tmp/` and does not make real requests
@@ -485,6 +486,9 @@ make no network requests.
   button. Unsupported URLs are still ignored silently without a retry.
 - Queue positions are computed from the jobs still waiting for a worker, so a
   job shows `🕒 2/3` while it waits and a progress line once it starts.
+- The `❌ Cancel` button stops a waiting job immediately; a running yt-dlp
+  download is stopped at the next progress callback and its temporary directory
+  is removed. Cancelled jobs are not recorded as errors.
 - Media uploads use `UPLOAD_TIMEOUT_SEC` (600 seconds by default). If Telegram
   does not answer in time, the bot does **not** resend automatically, because the
   file may already have arrived and a retry could duplicate it. Instead it shows

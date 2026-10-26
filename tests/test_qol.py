@@ -206,6 +206,72 @@ class QueueQolTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertIsNone(queue.queue_position(job))
 
+    async def test_cancel_marks_only_owner(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="qol-") as raw:
+            queue = await self._queue(raw)
+            job = Job(
+                id="a",
+                user_id=42,
+                chat_id=42,
+                status_message_id=1,
+                url="https://example.com/a",
+                preset="h:720",
+                title="Test",
+                platform="YouTube",
+            )
+            await queue.submit(job)
+            self.assertEqual(
+                await queue.cancel("a", chat_id=42, user_id=43), "missing"
+            )
+            self.assertFalse(queue.is_cancelled(job))
+            self.assertEqual(
+                await queue.cancel("a", chat_id=42, user_id=42), "cancelled"
+            )
+            self.assertTrue(queue.is_cancelled(job))
+            self.assertEqual(
+                await queue.cancel("a", chat_id=42, user_id=42), "already"
+            )
+
+
+class CancelBehaviourTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cancelled_job_is_not_shown_as_error(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="qol-") as raw:
+            bot = _FakeBot()
+            settings = SimpleNamespace(
+                concurrency=1,
+                download_dir=Path(raw),
+                max_queue_per_user=5,
+                daily_limit=0,
+                cache_days=0,
+                max_upload_bytes=50 * 1024 * 1024,
+                max_upload_mb=50,
+                upload_timeout_sec=30,
+                gallery_enabled=False,
+                playlist_limit=5,
+                playlist_max_total_sec=1800,
+            )
+            queue = JobQueue(
+                bot,
+                SimpleNamespace(is_promoted=AsyncMock(return_value=False)),
+                settings,
+                SimpleNamespace(),
+            )  # type: ignore[arg-type]
+            job = Job(
+                id="c1",
+                user_id=42,
+                chat_id=42,
+                status_message_id=7,
+                url="https://example.com/c",
+                preset="h:720",
+                title="Iptal",
+                platform="YouTube",
+            )
+            await queue.submit(job)
+            await queue.cancel("c1", chat_id=42, user_id=42)
+            await queue._process(job)
+            self.assertEqual(job.status_stage, "cancelled")
+            self.assertTrue(any("İptal edildi" in (e.get("text") or "") for e in bot.edits))
+
 
 if __name__ == "__main__":
     unittest.main()

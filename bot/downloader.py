@@ -29,6 +29,10 @@ class DownloadError(Exception):
     """Kullaniciya gosterilebilecek, anlasilir indirme hatasi."""
 
 
+class DownloadCancelled(DownloadError):
+    """Kullanici indirmeyi iptal etti; hata mesaji gosterilmez."""
+
+
 @dataclass(slots=True)
 class MediaInfo:
     url: str
@@ -327,6 +331,9 @@ class Downloader:
 
         def hook(data: dict[str, Any]) -> None:
             status = data.get("status")
+            if state.get("cancelled"):
+                # Iptal edilen indirmeyi yt-dlp'nin kendi hata sinifiyla durdur.
+                raise yt_dlp.utils.DownloadCancelled("İptal edildi")
             if status == "downloading":
                 state["status"] = "downloading"
                 state["downloaded"] = data.get("downloaded_bytes") or 0
@@ -363,9 +370,15 @@ class Downloader:
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 ydl.extract_info(url, download=True)
+        except yt_dlp.utils.DownloadCancelled as exc:
+            raise DownloadCancelled("İptal edildi.") from exc
         except yt_dlp.utils.DownloadError as exc:
+            if state.get("cancelled"):
+                raise DownloadCancelled("İptal edildi.") from exc
             raise DownloadError(_friendly_error(str(exc))) from exc
         except Exception as exc:  # noqa: BLE001
+            if state.get("cancelled"):
+                raise DownloadCancelled("İptal edildi.") from exc
             log.exception("Indirme hatasi: %s", url)
             raise DownloadError(_friendly_error(str(exc))) from exc
 

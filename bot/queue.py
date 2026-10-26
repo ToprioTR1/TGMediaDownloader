@@ -34,11 +34,12 @@ from aiogram.types import (
 
 from .config import Settings
 from .database import Database
-from .downloader import DownloadError, Downloader
+from .downloader import DownloadCancelled, DownloadError, Downloader
 from .gallery import VIDEO_EXT, GalleryDownloader, GalleryError
 from .keyboards import gallery_keyboard
 from .media import VideoMeta, inspect_video
 from .qol import (
+    TEXT_CANCEL,
     error_category,
     error_hint,
     media_buttons,
@@ -91,6 +92,31 @@ class Job:
         """Onbellek anahtarinda video ve dosya gonderimini ayirir."""
         return f"{self.preset}|doc" if self.as_document else self.preset
 
+    def clone_for_retry(self, **changes: Any) -> "Job":
+        data = {
+            "id": uuid.uuid4().hex[:10],
+            "user_id": self.user_id,
+            "chat_id": self.chat_id,
+            "status_message_id": self.status_message_id,
+            "url": self.url,
+            "preset": self.preset,
+            "title": self.title,
+            "platform": self.platform,
+            "duration": self.duration,
+            "kind": self.kind,
+            "source_url": self.source_url,
+            "show_caption": self.show_caption,
+            "as_document": self.as_document,
+            "status_header": self.status_header,
+            "video_width": self.video_width,
+            "video_height": self.video_height,
+            "video_duration": self.video_duration,
+            "heights": list(self.heights),
+            "error_text": self.error_text,
+        }
+        data.update(changes)
+        return Job(**data)
+
 
 class QueueFullError(Exception):
     """Kullanicinin kuyrugu dolu."""
@@ -131,6 +157,9 @@ class JobQueue:
         self._pending: Counter[int] = Counter()
         self._jobs: dict[tuple[int, int, str, str], Job] = {}
         self._retry_jobs: dict[str, Job] = {}
+        self._cancel_marks: set[str] = set()
+        self._cancel_events: dict[str, asyncio.Event] = {}
+        self._cancel_author: dict[str, tuple[int, int]] = {}
         self._tmpdirs: set[Path] = set()
         self._janitor: asyncio.Task[None] | None = None
         self._active = 0
@@ -240,33 +269,16 @@ class JobQueue:
             return False
         self._retry_jobs.pop(job_id, None)
 
+        new_job = job.clone_for_retry()
         # Yeni mesaj gondermek yerine mevcut hata mesajini durum mesajina cevir.
         await self._status.edit(
             chat_id,
             message_id,
-            render_job_status(job.status_header, "queued"),
+            self._queue_text(new_job, render_job_status(job.status_header, "queued")),
+            keyboard=self._cancel_keyboard(new_job),
             wait=True,
         )
 
-        new_job = Job(
-            id=uuid.uuid4().hex[:10],
-            user_id=job.user_id,
-            chat_id=chat_id,
-            status_message_id=message_id,
-            url=job.url,
-            preset=job.preset,
-            title=job.title,
-            platform=job.platform,
-            duration=job.duration,
-            kind=job.kind,
-            source_url=job.source_url,
-            show_caption=job.show_caption,
-            as_document=job.as_document,
-            status_header=job.status_header,
-            video_width=job.video_width,
-            video_height=job.video_height,
-            video_duration=job.video_duration,
-        )
         try:
             queued = await self.submit(new_job)
         except QueueFullError as exc:
@@ -291,6 +303,39 @@ class JobQueue:
             # Ayni is zaten calisiyor; bu eski hata mesajini birakma.
             await self._status.delete(chat_id, message_id)
         return True
+
+    async def cancel(self, job_id: str, chat_id: int, user_id: int) -> str:
+        """Kullanicinin kendi isini iptal eder.
+
+        Kuyrukta bekleyen is isci tarafindan alindiginda hemen sonlanir.
+        Calisan indirme yt-dlp geri cagrisiyla durdurulur; post-processing
+        adiminda ise isaretlenir ve gonderim oncesi durdurulur.
+        """
+        job = self._retry_jobs.get(job_id)
+        if job is None:
+            job = next((j for j in self._jobs.values() if j.id == job_id), None)
+        if job is None or job.user_id != user_id or job.chat_id != chat_id:
+            return "missing"
+        self._retry_jobs.pop(job_id, None)
+        if job_id in self._cancel_marks:
+            return "already"
+        self._cancel_marks.add(job_id)
+        self._cancel_author[job_id] = (chat_id, user_id)
+        event = self._cancel_events.get(job_id)
+        if event is not None:
+            event.set()
+        self._trim_cancel_state()
+        return "cancelled"
+
+    def is_cancelled(self, job: Job) -> bool:
+        return job.id in self._cancel_marks
+
+    def _trim_cancel_state(self) -> None:
+        while len(self._cancel_marks) > 500:
+            old = next(iter(self._cancel_marks))
+            self._cancel_marks.discard(old)
+            self._cancel_author.pop(old, None)
+            self._cancel_events.pop(old, None)
 
     async def submit(self, job: Job) -> bool:
         """Isi kuyruga ekler.
@@ -341,6 +386,7 @@ class JobQueue:
             job.chat_id,
             job.status_message_id,
             self._queue_text(job, render_job_status(job.status_header, "queued")),
+            keyboard=self._cancel_keyboard(job),
         )
         return True
 
@@ -350,8 +396,18 @@ class JobQueue:
         while True:
             job = await self._queue.get()
             self._active += 1
+            event = self._cancel_events.get(job.id)
+            if event is None:
+                event = asyncio.Event()
+                self._cancel_events[job.id] = event
+                if self.is_cancelled(job):
+                    event.set()
+            task = asyncio.create_task(self._process(job), name=f"dl-job-{job.id}")
+            canceller = asyncio.create_task(
+                self._wait_cancel(job, task, event), name=f"dl-cancel-{job.id}"
+            )
             try:
-                await self._process(job)
+                await task
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001
@@ -365,6 +421,10 @@ class JobQueue:
                         "❌ Beklenmeyen bir hata oluştu. Lütfen tekrar deneyin.",
                     )
             finally:
+                canceller.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await canceller
+                self._cancel_events.pop(job.id, None)
                 key = (job.user_id, job.chat_id, job.url, job.cache_preset)
                 if self._jobs.get(key) is job:
                     self._jobs.pop(key, None)
@@ -374,7 +434,18 @@ class JobQueue:
                     self._pending.pop(job.user_id, None)
                 self._queue.task_done()
 
+    async def _wait_cancel(
+        self, job: Job, task: asyncio.Task[None], event: asyncio.Event
+    ) -> None:
+        """Iptal isaretini bekler; gelirse calisan is gorevini iptal eder."""
+        await event.wait()
+        if not task.done():
+            task.cancel()
+
     async def _process(self, job: Job) -> None:
+        if self.is_cancelled(job):
+            await self._cancelled(job)
+            return
         if job.kind == "gallery":
             await self._process_gallery(job)
             return
@@ -384,6 +455,9 @@ class JobQueue:
                 job.url, job.cache_preset, self._settings.cache_days
             )
             if cached is not None:
+                if self.is_cancelled(job):
+                    await self._cancelled(job)
+                    return
                 try:
                     await self._set_stage(
                         job, "cached", "📤 Önbellekten gönderiliyor…"
@@ -425,10 +499,13 @@ class JobQueue:
             ticker = asyncio.create_task(self._progress_loop(job, state))
             path: Path | None = None
             for attempt in range(2):
+                if self.is_cancelled(job):
+                    await self._cancelled(job)
+                    return
                 attempt_dir = tmpdir / f"try-{attempt + 1}"
                 attempt_dir.mkdir(parents=True, exist_ok=True)
                 state.clear()
-                state.update({"status": "starting"})
+                state.update({"status": "starting", "cancelled": False})
                 try:
                     path = await asyncio.to_thread(
                         self._downloader.download,
@@ -437,8 +514,14 @@ class JobQueue:
                         attempt_dir,
                         state,
                     )
+                except DownloadCancelled:
+                    await self._cancelled(job)
+                    return
+                except asyncio.CancelledError:
+                    state["cancelled"] = True
+                    raise
                 except Exception as exc:  # noqa: BLE001 - bir kez yeniden denenir
-                    if attempt == 0:
+                    if attempt == 0 and not self.is_cancelled(job):
                         log.warning(
                             "Indirme basarisiz, bir kez daha denenecek (%s): %s",
                             job.id,
@@ -458,6 +541,10 @@ class JobQueue:
 
             await self._stop_ticker(ticker)
             ticker = None
+
+            if self.is_cancelled(job):
+                await self._cancelled(job)
+                return
 
             size = path.stat().st_size
             if size > self._settings.max_upload_bytes:
@@ -498,6 +585,10 @@ class JobQueue:
                 human_size(size),
                 elapsed,
             )
+        except DownloadCancelled:
+            await self._stop_ticker(ticker)
+            ticker = None
+            await self._cancelled(job)
         except DownloadError as exc:
             await self._stop_ticker(ticker)
             ticker = None
@@ -536,6 +627,9 @@ class JobQueue:
     # ------------------------------------------------------------ galeri (foto)
 
     async def _process_gallery(self, job: Job) -> None:
+        if self.is_cancelled(job):
+            await self._cancelled(job)
+            return
         if self._gallery is None or not self._gallery.available:
             await self._status.edit(
                 job.chat_id,
@@ -557,6 +651,9 @@ class JobQueue:
             await self._set_stage(job, "download", "🖼 <b>Medya indiriliyor…</b>")
             files: list[Path] = []
             for attempt in range(2):
+                if self.is_cancelled(job):
+                    await self._cancelled(job)
+                    return
                 attempt_dir = tmpdir / f"try-{attempt + 1}"
                 attempt_dir.mkdir(parents=True, exist_ok=True)
                 try:
@@ -564,7 +661,7 @@ class JobQueue:
                         self._gallery.download, job.url, attempt_dir
                     )
                 except Exception as exc:  # noqa: BLE001 - bir kez yeniden denenir
-                    if attempt == 0:
+                    if attempt == 0 and not self.is_cancelled(job):
                         log.warning(
                             "Galeri indirmesi basarisiz, bir kez daha denenecek (%s): %s",
                             job.id,
@@ -598,6 +695,9 @@ class JobQueue:
                     f"Gönderi {human_size(total)} boyutunda. Telegram limiti "
                     f"{self._settings.max_upload_mb} MB."
                 )
+            if self.is_cancelled(job):
+                await self._cancelled(job)
+                return
             await self._set_stage(
                 job, "sending", f"📤 <b>Gönderiliyor…</b> ({human_size(total)})"
             )
@@ -1070,6 +1170,9 @@ class JobQueue:
             job.chat_id,
             job.status_message_id,
             text,
+            keyboard=self._cancel_keyboard(job)
+            if stage in {"queued", "download", "cached", "sending"}
+            else None,
         )
 
     def _targets(self, job: Job) -> list[tuple[int, int]]:
@@ -1110,6 +1213,20 @@ class JobQueue:
     @property
     def pending_total(self) -> int:
         return sum(self._pending.values())
+
+    def _cancel_keyboard(self, job: Job) -> InlineKeyboardMarkup | None:
+        if job.chat_id < 0:
+            return None
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=TEXT_CANCEL,
+                        callback_data=f"act|cancel|{job.id}",
+                    )
+                ]
+            ]
+        )
 
     def _retry_keyboard(self, job: Job) -> InlineKeyboardMarkup:
         return retry_keyboard(
@@ -1201,6 +1318,22 @@ class JobQueue:
                 "⚠️ <b>Gönderim yanıtı alınamadı.</b>\n"
                 "Video geldiyse işlem tamamlandı. Gelmediyse linki tekrar gönderin.",
                 last_stage=last_stage,
+            ),
+            wait=True,
+        )
+        await self._status.forget(job.chat_id, job.status_message_id)
+
+    async def _cancelled(self, job: Job) -> None:
+        """Iptal edilen isi sessizce kapatir; hata kaydi ve retry butonu yok."""
+        job.status_stage = "cancelled"
+        log.info("Is iptal edildi: %s (%s)", job.id, job.url)
+        await self._status.edit(
+            job.chat_id,
+            job.status_message_id,
+            render_job_status(
+                job.status_header,
+                "cancelled",
+                "🚫 <b>İptal edildi.</b>\nYeni bir bağlantı gönderebilirsiniz.",
             ),
             wait=True,
         )

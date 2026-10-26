@@ -1517,8 +1517,20 @@ async def main() -> int:
         )
         print("29) kuyruk bilgisi OK")
 
+        # 30) iptal butonu
+        check(
+            await q4.cancel("qpos2", q4_chat, q4_chat) == "cancelled",
+            "is iptal edilemedi",
+        )
+        check(
+            await q4.cancel("qpos2", q4_chat, OTHER.id) == "missing",
+            "baskasinin isi iptal edilebildi",
+        )
+        await q4.cancel("qpos1", q4_chat, q4_chat)
+        print("30) iptal butonu OK")
+
         stats = await db.stats()
-        print("30) istatistikler:", stats)
+        print("31) istatistikler:", stats)
     except AssertionError as exc:
         print("HATA:", exc)
         return 1
