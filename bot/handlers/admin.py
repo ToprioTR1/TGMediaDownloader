@@ -410,7 +410,9 @@ async def cmd_demote(message: Message, db: Database) -> None:
 
 
 @router.callback_query(IsAdmin(), lambda c: (c.data or "").startswith("admin|"))
-async def cb_admin(callback: CallbackQuery, db: Database, queue: JobQueue) -> None:
+async def cb_admin(
+    callback: CallbackQuery, db: Database, queue: JobQueue, settings: Settings
+) -> None:
     action = (callback.data or "").split("|", 1)[1]
     if action == "stats":
         await callback.answer()
@@ -419,6 +421,15 @@ async def cb_admin(callback: CallbackQuery, db: Database, queue: JobQueue) -> No
                 await callback.message.edit_text(
                     _stats_text(await db.stats(), queue=queue),
                     reply_markup=admin_keyboard(),
+                )
+    elif action == "bandwidth":
+        await callback.answer()
+        if callback.message:
+            with suppress(TelegramBadRequest):
+                await callback.message.edit_text(
+                    _bandwidth_text(await db.bandwidth_report(days=31), settings),
+                    reply_markup=admin_keyboard(),
+                    disable_web_page_preview=True,
                 )
     elif action == "users":
         await callback.answer()

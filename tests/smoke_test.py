@@ -760,6 +760,41 @@ async def main() -> int:
         )
         print("14b) /bandwidth OK")
 
+        # 14c) /admin panelinde bant genişliği butonu
+        mark = len(bot.calls)
+        await dp.feed_update(bot, msg_update("/admin", 16))
+        panel = [
+            c
+            for c in bot.calls[mark:]
+            if c[0] == "send_message" and "Admin paneli" in (c[1].get("text") or "")
+        ]
+        check(bool(panel), "/admin paneli gelmedi")
+        panel_callbacks = [
+            b.callback_data
+            for row in (panel[-1][1].get("reply_markup").inline_keyboard or [])
+            for b in row
+        ]
+        check(
+            "admin|bandwidth" in panel_callbacks,
+            f"panelde bant genişliği butonu yok: {panel_callbacks}",
+        )
+
+        panel_message = simple_message("panel", 9800).as_(bot)
+        mark = len(bot.calls)
+        await dp.feed_update(
+            bot, callback_update("admin|bandwidth", panel_message)
+        )
+        panel_edits = [
+            (c[1].get("text") or "")
+            for c in bot.calls[mark:]
+            if c[0] == "edit_message_text"
+        ]
+        check(
+            any("Bant genişliği" in t for t in panel_edits),
+            f"panel butonu raporu açmadı: {panel_edits}",
+        )
+        print("14c) admin panel butonu OK")
+
         # 15) broadcast (kullanicilar + gruplar)
         group_chat = Chat(id=-100777, type="supergroup", title="Test Grubu")
         await dp.feed_update(bot, msg_update("/start", 115, chat=group_chat))

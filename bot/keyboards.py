@@ -38,9 +38,10 @@ def admin_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(text="📊 İstatistik", callback_data="admin|stats"),
-                InlineKeyboardButton(text="👥 Kullanıcılar", callback_data="admin|users"),
+                InlineKeyboardButton(text="📶 Bant genişliği", callback_data="admin|bandwidth"),
             ],
             [
+                InlineKeyboardButton(text="👥 Kullanıcılar", callback_data="admin|users"),
                 InlineKeyboardButton(text="⚡️ Önbellek", callback_data="admin|cache"),
             ],
         ]
