@@ -1434,6 +1434,9 @@ async def main() -> int:
         # 27b) kalite menusu gercek medya uzerinde calisiyor mu?
         q_url = "https://example.com/qmenu-video"
         q_key = media_cache_key(q_url, "h:720")
+        cover_file = Path(settings.cover_dir) / f"{q_key}.jpg"
+        cover_file.parent.mkdir(parents=True, exist_ok=True)
+        cover_file.write_bytes(b"\xff\xd8\xff\xd9")
         await db.cache_put(
             q_key,
             q_url,
@@ -1446,6 +1449,7 @@ async def main() -> int:
             1080,
             1920,
             24,
+            str(cover_file),
         )
         video_msg = simple_message("video", 9600).as_(bot)
         video_msg = video_msg.model_copy(
@@ -1536,6 +1540,13 @@ async def main() -> int:
         check(
             not any("kapak görseli yok" in a for a in cover_answers),
             f"kapak butonu 'yok' dedi: {cover_answers}",
+        )
+        # Telegram file_id yerine yerel JPEG gonderilmeli.
+        cover_arg = cover_photos[0][1].get("cached")
+        check(
+            cover_arg is not True
+            and not cover_photos[0][1].get("path", "").startswith("thumb_"),
+            f"kapak thumbnail file_id olarak gonderildi: {cover_photos[0][1]}",
         )
         print("27c) kapak fotoğrafı OK")
 

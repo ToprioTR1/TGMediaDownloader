@@ -376,5 +376,61 @@ class QueueQolTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("1", text)
 
 
+class CoverTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cover_is_sent_as_file_not_thumbnail_file_id(self) -> None:
+        """Telegram thumbnail file_id'sini fotograf olarak kabul etmiyor."""
+        from bot.handlers.download import _send_cover
+
+        with tempfile.TemporaryDirectory(prefix="cover-") as raw:
+            cover = Path(raw) / "k.jpg"
+            cover.write_bytes(b"\xff\xd8\xff\xd9")
+            bot = _CaptureBot()
+            message = SimpleNamespace(chat=SimpleNamespace(id=42))
+            sent = await _send_cover(
+                bot,  # type: ignore[arg-type]
+                42,
+                message,  # type: ignore[arg-type]
+                {"title": "Kapak", "cover_path": str(cover), "url": "https://e/v"},
+                30,
+            )
+            self.assertTrue(sent)
+            self.assertEqual(bot.photos, 1)
+            photo = bot.photo_arg
+            # file_id (str) yerine yerel dosya gonderilmeli.
+            self.assertFalse(isinstance(photo, str))
+            self.assertEqual(Path(photo.path).name, "k.jpg")
+
+    async def test_missing_cover_falls_back_to_source(self) -> None:
+        from bot.handlers.download import _send_cover
+
+        bot = _CaptureBot()
+        sent = await _send_cover(
+            bot,  # type: ignore[arg-type]
+            42,
+            SimpleNamespace(chat=SimpleNamespace(id=42)),  # type: ignore[arg-type]
+            {"title": "Kapak", "cover_path": None, "url": "https://e/v"},
+            30,
+        )
+        self.assertTrue(sent)
+        self.assertEqual(bot.photos, 0)
+        self.assertEqual(bot.messages, 1)
+
+
+class _CaptureBot:
+    def __init__(self) -> None:
+        self.photos = 0
+        self.messages = 0
+        self.photo_arg = None
+
+    async def send_photo(self, **kwargs):
+        self.photos += 1
+        self.photo_arg = kwargs.get("photo")
+        return SimpleNamespace(message_id=1)
+
+    async def send_message(self, **kwargs):
+        self.messages += 1
+        return SimpleNamespace(message_id=1)
+
+
 if __name__ == "__main__":
     unittest.main()

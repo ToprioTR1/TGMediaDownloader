@@ -112,6 +112,11 @@ class Settings:
     def max_upload_bytes(self) -> int:
         return self.max_upload_mb * 1024 * 1024
 
+    @property
+    def cover_dir(self) -> Path:
+        """Kapak fotoGraflarinin kalici olarak saklandigi klasor."""
+        return self.download_dir / "covers"
+
     def default_height_for(self, platform: str) -> int:
         """Kalite belirtilmemis linklerde kullanilacak varsayilan yukseklik."""
         name = (platform or "").lower()

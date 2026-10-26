@@ -169,3 +169,41 @@ def inspect_video(path: Path, thumbnail_dir: Path | None = None) -> VideoMeta | 
     except Exception:  # noqa: BLE001 - metadata istege bagli bir iyilestirmedir
         log.exception("Video metadata okunamadi: %s", path)
         return None
+
+
+def keep_thumbnail(
+    thumbnail: Path | None, cache_key: str, directory: Path
+) -> str | None:
+    """Onizlemeyi kalici klasore kopyalar ve yolunu dondurur.
+
+    Telegram bir videonun `thumbnail` file_id'sini baska bir cagrida fotograf
+    olarak kabul etmiyor ("can't use file of type Thumbnail as Photo"). Bu
+    yuzden kapak fotoGraFi butonunda yerel JPEG dosyasi kullanilir. Kopya
+    gecici `dl-*` klasoru silindikten sonra da kalir.
+    """
+    if thumbnail is None or not thumbnail.is_file():
+        return None
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        target = directory / f"{cache_key}.jpg"
+        if target != thumbnail:
+            shutil.copyfile(thumbnail, target)
+        return str(target)
+    except OSError:
+        log.exception("Kapak onizlemesi saklanamadi: %s", thumbnail)
+        return None
+
+
+def remove_thumbnail(path: str | None, directory: Path) -> None:
+    """Saklanan kapak onizlemesini siler (onbellek kaydi silinirken)."""
+    if not path:
+        return
+    try:
+        candidate = Path(path).resolve()
+        root = directory.resolve()
+    except OSError:
+        return
+    # Yalnizca kendi klasorumuzdeki dosyalari sil.
+    if root not in candidate.parents:
+        return
+    candidate.unlink(missing_ok=True)

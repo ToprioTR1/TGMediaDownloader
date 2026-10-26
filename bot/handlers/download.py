@@ -20,6 +20,7 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Awaitable, Callable
 from urllib.parse import urlparse
 
@@ -27,6 +28,7 @@ from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from aiogram.types import (
     CallbackQuery,
+    FSInputFile,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     LinkPreviewOptions,
@@ -1078,35 +1080,31 @@ async def _send_cover(
 ) -> bool:
     """Videonun kapagini gonderir (yeniden indirmez).
 
-    Once onbellekte kayitli onizleme file_id'si, sonra mesajin kendi
-    thumbnail'i denenir. Telegram bazi videolarda thumbnail dondurmez;
-    bu yuzden video kaynak URL'si varsa kucuk bir onizleme gonderilir.
+    Telegram, videonun `thumbnail` file_id'sini fotograf olarak kabul etmiyor
+    ("can't use file of type Thumbnail as Photo"). Bu yuzden yalnizca
+    gonderim sirasinda saklanan yerel JPEG kullanilir.
     """
-    photo = row.get("cover_file_id")
-    if not photo:
-        media = getattr(message, "video", None) or getattr(
-            message, "animation", None
-        )
-        thumb = getattr(media, "thumbnail", None) if media is not None else None
-        photo = getattr(thumb, "file_id", None)
-    if photo:
-        await bot.send_photo(
-            chat_id=chat_id,
-            photo=photo,
-            caption=f"🖼 <b>{escape((row.get('title') or 'Kapak')[:200])}</b>",
-            request_timeout=timeout,
-        )
-        return True
+    cover = row.get("cover_path")
+    if cover and Path(cover).is_file():
+        try:
+            await bot.send_photo(
+                chat_id=chat_id,
+                photo=FSInputFile(cover),
+                caption=f"🖼 <b>{escape((row.get('title') or 'Kapak')[:200])}</b>",
+                request_timeout=timeout,
+            )
+            return True
+        except TelegramBadRequest as exc:
+            log.info("Kapak dosyasi gonderilemedi (%s): %s", cover, exc)
 
-    # Thumbnail yok: kaynaktan kucuk onizlemeyi dene.
     source = row.get("url")
     if source:
         await bot.send_message(
             chat_id=chat_id,
             text=(
                 f"🖼 <b>{escape((row.get('title') or 'Kapak')[:200])}</b>\n"
-                "Telegram bu video için kapak görseli saklamadı; "
-                "kaynağı aşağıdan açabilirsiniz."
+                "Bu video için kapak görseli saklanmamış; kaynağı aşağıdan "
+                "açabilirsiniz. Videoyu yeniden indirirseniz kapak da kaydedilir."
             ),
             link_preview_options=LinkPreviewOptions(
                 is_disabled=False, url=source, prefer_small_media=True

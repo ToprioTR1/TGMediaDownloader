@@ -37,7 +37,7 @@ from .database import Database
 from .downloader import DownloadCancelled, DownloadError, Downloader
 from .gallery import VIDEO_EXT, GalleryDownloader, GalleryError
 from .keyboards import gallery_keyboard
-from .media import VideoMeta, inspect_video
+from .media import VideoMeta, inspect_video, keep_thumbnail
 from .qol import (
     TEXT_CANCEL,
     error_category,
@@ -175,7 +175,7 @@ class JobQueue:
         self._cancel_events: dict[str, asyncio.Event] = {}
         self._cancel_author: dict[str, tuple[int, int]] = {}
         self._tmpdirs: set[Path] = set()
-        self._last_cover_file_id: str | None = None
+        self._last_cover_path: str | None = None
         self._janitor: asyncio.Task[None] | None = None
         self._active = 0
 
@@ -587,7 +587,7 @@ class JobQueue:
                         job.video_width,
                         job.video_height,
                         job.video_duration,
-                        self._last_cover_file_id,
+                        self._last_cover_path,
                     )
                 except Exception:  # noqa: BLE001 - onbellek hatasi gonderimi bozmasin
                     log.exception("Onbellek yazilamadi: %s", job.id)
@@ -988,9 +988,19 @@ class JobQueue:
                 job.video_height = video_meta.height
                 job.video_duration = video_meta.duration
 
+        # Telegram bir videonun thumbnail file_id'sini fotograf olarak kabul
+        # etmiyor. Kapak butonu icin onizlemeyi kalici bir JPEG olarak sakla.
+        self._last_cover_path = None
+        if video_meta is not None and video_meta.thumbnail is not None:
+            self._last_cover_path = await asyncio.to_thread(
+                keep_thumbnail,
+                video_meta.thumbnail,
+                media_cache_key(job.url, job.cache_preset),
+                self._settings.cover_dir,
+            )
+
         cached_file_id: str | None = None
         cached_media_type = "video"
-        cached_cover_id: str | None = None
         for index, (chat_id, _) in enumerate(self._targets(job)):
             file = FSInputFile(path, filename=path.name)
             msg, media_type = await self._send_file(
@@ -1005,8 +1015,6 @@ class JobQueue:
             if index == 0:
                 cached_file_id = _file_id(msg, media_type)
                 cached_media_type = media_type
-                cached_cover_id = _cover_file_id(msg)
-        self._last_cover_file_id = cached_cover_id
         return cached_file_id, cached_media_type
 
     async def _inspect_video(self, path: Path) -> VideoMeta | None:
@@ -1136,7 +1144,23 @@ class JobQueue:
                     log.info("%s eski gecici dosya/klasor temizlendi.", removed)
             except Exception:  # noqa: BLE001 - temizlik botu durdurmasin
                 log.exception("Gecici dosya temizligi basarisiz")
+            try:
+                orphans = await self._cleanup_covers()
+                if orphans:
+                    log.info("%s yetim kapak dosyasi silindi.", orphans)
+            except Exception:  # noqa: BLE001 - temizlik botu durdurmasin
+                log.exception("Kapak dosyasi temizligi basarisiz")
             await asyncio.sleep(30 * 60)
+
+    async def _cleanup_covers(self) -> int:
+        """Onbellekte kaydi kalmamis kapak dosyalarini siler."""
+        directory = self._settings.cover_dir
+        if not directory.exists():
+            return 0
+        referenced = await self._db.cache_cover_paths()
+        return await asyncio.to_thread(
+            _remove_orphan_covers, directory, referenced
+        )
 
     def _cleanup_downloads(self, max_age_sec: float) -> int:
         root = self._settings.download_dir
@@ -1422,12 +1446,17 @@ def _file_id(message: Message, kind: str) -> str | None:
     return getattr(media, "file_id", None)
 
 
-def _cover_file_id(message: Message) -> str | None:
-    """Gonderilen mesajdaki video/animasyon onizlemesinin dosya kimligi."""
-    for kind in ("video", "animation", "document", "audio"):
-        media = getattr(message, kind, None)
-        thumb = getattr(media, "thumbnail", None) if media is not None else None
-        file_id = getattr(thumb, "file_id", None)
-        if file_id:
-            return file_id
-    return None
+def _remove_orphan_covers(directory: Path, referenced: set[str]) -> int:
+    """Kendi kapak klasorumuzde kaydi olmayan dosyalari siler."""
+    removed = 0
+    for entry in directory.iterdir():
+        if not entry.is_file() or entry.suffix.lower() != ".jpg":
+            continue
+        if str(entry) in referenced:
+            continue
+        try:
+            entry.unlink(missing_ok=True)
+            removed += 1
+        except OSError:
+            log.debug("Yetim kapak silinemedi: %s", entry)
+    return removed
