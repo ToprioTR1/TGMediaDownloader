@@ -28,7 +28,8 @@ ile yazıldı, Docker ile çalışacak şekilde hazırlandı.
   bit hızı, H.264 uyumluluk modu ve video/dosya gönderimi
 - 🔘 Her videonun altında hızlı aksiyonlar: `🎵 Ses olarak al` ·
   `🎚 Kalite değiştir` · `📄 Dosya olarak gönder` · `🖼 Kapak fotoğrafı`;
-  mümkün olduğunda yeniden indirmeden `file_id` önbelleğinden çalışır
+  mümkün olduğunda yeniden indirmeden `file_id` önbelleğinden çalışır ve
+  gruplarda da görünür
 - 🧠 Akıllı hatalar: hataya göre yeniden dene, daha düşük kalite, dosya olarak
   gönder veya kaynağı aç butonu ve tek satırlık bir öneri
 - 🕒 Kuyruk sırası (`🕒 2/3`) ve iş beklerken/indirilirken `❌ İptal` butonu

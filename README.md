@@ -32,7 +32,7 @@ Built with Python 3.12 + [aiogram 3](https://github.com/aiogram/aiogram) +
   MP3 bitrate, H.264 compatibility mode and video/document delivery
 - 🔘 Quick actions under every video: `🎵 Get audio` · `🎚 Change quality` ·
   `📄 Send as file` · `🖼 Cover photo`, all served from the `file_id` cache
-  without re-downloading when possible
+  without re-downloading when possible; also shown in groups
 - 🧠 Smart errors: depending on the failure the card offers retry, a lower
   quality, sending as a file, or opening the source, with a one-line hint
 - 🕒 Queue position (`🕒 2/3`) and a `❌ Cancel` button while a job is waiting

@@ -52,7 +52,6 @@ class MediaButtonTests(unittest.TestCase):
             can_document=True,
             can_thumbnail=True,
             can_quality=True,
-            in_group=False,
         )
         texts = [b.text for b in _buttons(keyboard)]
         self.assertIn("🎵 Ses olarak al", texts)
@@ -71,24 +70,35 @@ class MediaButtonTests(unittest.TestCase):
             can_document=False,
             can_thumbnail=False,
             can_quality=False,
-            in_group=False,
         )
         self.assertIsNone(keyboard)
 
-    def test_group_chat_only_keeps_link_button(self) -> None:
-        keyboard = media_buttons(
+    def test_group_chat_shows_same_actions(self) -> None:
+        """Gruplarda da tum aksiyonlar gorunmeli (Telegram destekliyor)."""
+        private = media_buttons(
             source_url="https://example.com/v",
             cache_key="k",
             can_audio=True,
             can_document=True,
             can_thumbnail=True,
             can_quality=True,
-            in_group=True,
         )
-        assert keyboard is not None
-        buttons = _buttons(keyboard)
-        self.assertEqual(len(buttons), 1)
-        self.assertEqual(buttons[0].url, "https://example.com/v")
+        group = media_buttons(
+            source_url="https://example.com/v",
+            cache_key="k",
+            can_audio=True,
+            can_document=True,
+            can_thumbnail=True,
+            can_quality=True,
+        )
+        assert private is not None and group is not None
+        self.assertEqual(
+            [b.text for b in _buttons(private)],
+            [b.text for b in _buttons(group)],
+        )
+        group_texts = [b.text for b in _buttons(group)]
+        self.assertIn("🎚 Kalite değiştir", group_texts)
+        self.assertIn("🖼 Kapak fotoğrafı", group_texts)
 
     def test_labels(self) -> None:
         self.assertEqual(video_label("h:720"), "720p")

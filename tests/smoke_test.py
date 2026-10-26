@@ -1574,6 +1574,36 @@ async def main() -> int:
         )
         print("27c) kapak fotoğrafı OK")
 
+        # 27d) gruplarda da tüm aksiyon butonları görünmeli
+        group_chat = Chat(id=-100999, type="supergroup", title="Buton Grubu")
+        group_mark = len(bot.calls)
+        await dp.feed_update(
+            bot, msg_update(URL, 9700, chat=group_chat)
+        )
+        await asyncio.wait_for(queue._queue.join(), timeout=120)
+        group_media = [
+            c for c in bot.calls[group_mark:] if c[0] == "send_video"
+        ]
+        check(bool(group_media), "grup gönderiminde video yok")
+        group_markup = group_media[0][1].get("reply_markup")
+        group_buttons = (
+            [b for row in group_markup.inline_keyboard for b in row]
+            if group_markup
+            else []
+        )
+        group_labels = [b.text for b in group_buttons]
+        for expected in (
+            "🎵 Ses olarak al",
+            "🎚 Kalite değiştir",
+            "📄 Dosya olarak gönder",
+            "🖼 Kapak fotoğrafı",
+        ):
+            check(
+                expected in group_labels,
+                f"grupta video butonu yok: {expected} ({group_labels})",
+            )
+        print("27d) grup butonları OK")
+
         # 28) akilli hata butonlari: boyut hatasi + daha dusuk kalite
         failed = Job(
             id="size1",

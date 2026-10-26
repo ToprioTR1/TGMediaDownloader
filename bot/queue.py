@@ -910,7 +910,6 @@ class JobQueue:
             can_document=can_document,
             can_thumbnail=can_thumbnail,
             can_quality=can_quality,
-            in_group=job.chat_id < 0,
         )
 
     async def _send_cached(self, job: Job, row: dict[str, Any]) -> None:
@@ -1265,8 +1264,6 @@ class JobQueue:
         return sum(self._pending.values())
 
     def _cancel_keyboard(self, job: Job) -> InlineKeyboardMarkup | None:
-        if job.chat_id < 0:
-            return None
         return InlineKeyboardMarkup(
             inline_keyboard=[
                 [

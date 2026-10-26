@@ -217,32 +217,14 @@ def media_buttons(
     can_document: bool,
     can_thumbnail: bool,
     can_quality: bool,
-    in_group: bool,
     cancel_job_id: str | None = None,
 ) -> InlineKeyboardMarkup | None:
     """Gonderilen medyanin altindaki hizli aksiyonlar.
 
-    Album/oylatin listesi grup mesajlarinda Telegram buton desteklemedigi
-    icin `in_group` oldugunda yalnizca link/iptal satiri uretilir.
+    Telegram gruplarda inline butonlari destekler; yalnizca medya gruplarinda
+    (album) buton konulamaz. Bu yuzden aksiyonlar her sohbet turunde aynidir.
     """
     rows: list[list[InlineKeyboardButton]] = []
-    if in_group:
-        if source_url:
-            rows.append([InlineKeyboardButton(text=TEXT_SOURCE, url=source_url)])
-        if cancel_job_id:
-            rows.append(
-                [
-                    InlineKeyboardButton(
-                        text=TEXT_CANCEL,
-                        callback_data=f"act|cancel|{cancel_job_id}",
-                    )
-                ]
-            )
-        return (
-            InlineKeyboardMarkup(inline_keyboard=rows)
-            if rows
-            else InlineKeyboardMarkup(inline_keyboard=[])
-        )
 
     quality_row: list[InlineKeyboardButton] = []
     if can_audio:
@@ -278,6 +260,15 @@ def media_buttons(
 
     if source_url:
         rows.append([InlineKeyboardButton(text="🔗 Kaynak", url=source_url)])
+    if cancel_job_id:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=TEXT_CANCEL,
+                    callback_data=f"act|cancel|{cancel_job_id}",
+                )
+            ]
+        )
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
 

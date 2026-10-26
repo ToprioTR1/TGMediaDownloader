@@ -1045,7 +1045,6 @@ async def _resend_cached(bot: Bot, chat_id: int, row: dict, timeout: int) -> Non
         can_document=media_type == "video",
         can_thumbnail=media_type == "video",
         can_quality=media_type != "audio" and bool(row.get("height")),
-        in_group=chat_id < 0,
     )
     if media_type == "audio":
         await bot.send_audio(
@@ -1346,7 +1345,6 @@ async def on_action(
                     can_document=row.get("media_type") == "video",
                     can_thumbnail=row.get("media_type") == "video",
                     can_quality=row.get("media_type") != "audio",
-                    in_group=callback.message.chat.id < 0,
                 )
             )
         return
