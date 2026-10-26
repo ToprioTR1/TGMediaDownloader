@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS downloads (
     preset       TEXT,
     status       TEXT NOT NULL,
     filesize     INTEGER NOT NULL DEFAULT 0,
+    bytes_in     INTEGER NOT NULL DEFAULT 0,
     created_at   TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -131,6 +132,14 @@ class Database:
                 "height": "INTEGER",
                 "duration": "INTEGER",
                 "cover_path": "TEXT",
+            },
+        )
+        await self._add_columns(
+            "downloads",
+            {
+                # Indirilen (Telegram'a yuklenen) baytlar ayri tutulur; boylece
+                # aylik upload/download trafigi raporlanabilir.
+                "bytes_in": "INTEGER NOT NULL DEFAULT 0",
             },
         )
         await self._add_columns(
@@ -303,12 +312,14 @@ class Database:
         preset: str | None,
         status: str,
         filesize: int = 0,
+        bytes_in: int = 0,
     ) -> None:
         async with self._write_lock:
             await self.conn.execute(
-                "INSERT INTO downloads(user_id, url, platform, preset, status, filesize) "
-                "VALUES(?, ?, ?, ?, ?, ?)",
-                (user_id, url, platform, preset, status, filesize),
+                "INSERT INTO downloads"
+                "(user_id, url, platform, preset, status, filesize, bytes_in) "
+                "VALUES(?, ?, ?, ?, ?, ?, ?)",
+                (user_id, url, platform, preset, status, filesize, bytes_in),
             )
             if status == "ok":
                 await self.conn.execute(
@@ -364,6 +375,58 @@ class Database:
         ) as cur:
             rows = await cur.fetchall()
         return [(row["p"], int(row["c"])) for row in rows]
+
+    # ------------------------------------------------------------ bant genisligi
+
+    async def bandwidth_report(self, days: int = 31) -> dict[str, Any]:
+        """Aylik toplam ve gunluk trafik dokumu.
+
+        - `bytes_out`: Telegram'a yuklenen (kullaniciya giden) veri.
+        - `bytes_in`: platformdan indirilen veri.
+        Onbellekten gonderimlerde indirme olmadigi icin `bytes_in` 0'dir.
+        Yerel gun baslangicina gore gruplanir.
+        """
+        days = max(1, min(366, int(days)))
+        since = f"-{days} day"
+        async with self.conn.execute(
+            "SELECT COALESCE(SUM(filesize), 0) AS out_bytes, "
+            "COALESCE(SUM(bytes_in), 0) AS in_bytes, COUNT(*) AS jobs, "
+            "COALESCE(SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END), 0) "
+            "AS ok_jobs "
+            "FROM downloads WHERE created_at >= datetime('now', ?)",
+            (since,),
+        ) as cur:
+            totals = await cur.fetchone()
+        async with self.conn.execute(
+            "SELECT date(created_at, 'localtime') AS day, "
+            "COALESCE(SUM(filesize), 0) AS out_bytes, "
+            "COALESCE(SUM(bytes_in), 0) AS in_bytes, COUNT(*) AS jobs, "
+            "COALESCE(SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END), 0) "
+            "AS ok_jobs "
+            "FROM downloads WHERE created_at >= datetime('now', ?) "
+            "GROUP BY day ORDER BY day DESC",
+            (since,),
+        ) as cur:
+            rows = await cur.fetchall()
+        daily = [
+            {
+                "day": row["day"],
+                "bytes_out": int(row["out_bytes"] or 0),
+                "bytes_in": int(row["in_bytes"] or 0),
+                "jobs": int(row["jobs"] or 0),
+                "ok_jobs": int(row["ok_jobs"] or 0),
+            }
+            for row in rows
+            if row["day"]
+        ]
+        return {
+            "days": days,
+            "bytes_out": int(totals["out_bytes"] or 0) if totals else 0,
+            "bytes_in": int(totals["in_bytes"] or 0) if totals else 0,
+            "jobs": int(totals["jobs"] or 0) if totals else 0,
+            "ok_jobs": int(totals["ok_jobs"] or 0) if totals else 0,
+            "daily": daily,
+        }
 
     # --------------------------------------------------------------- onbellek
 

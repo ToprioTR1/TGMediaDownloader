@@ -60,6 +60,7 @@ class Settings:
     gallery_limit: int
     playlist_limit: int
     playlist_max_total_sec: int
+    monthly_traffic_gb: int
     log_level: str
 
     @classmethod
@@ -105,6 +106,7 @@ class Settings:
             playlist_max_total_sec=max(
                 0, _env_int("PLAYLIST_MAX_TOTAL_SEC", 1800)
             ),
+            monthly_traffic_gb=max(0, _env_int("MONTHLY_TRAFFIC_GB", 0)),
             log_level=_env_str("LOG_LEVEL", "INFO").upper(),
         )
 

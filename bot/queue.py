@@ -594,7 +594,7 @@ class JobQueue:
 
             elapsed = time.time() - started
             # Medya ulasti; kayit/silme hatasi basarili gonderimi hataya cevirmemeli.
-            await self._finish_success(job, size)
+            await self._finish_success(job, size, bytes_in=size)
             log.info(
                 "Tamamlandi kullanici=%s platform=%s boyut=%s sure=%.1fs",
                 job.user_id,
@@ -720,7 +720,7 @@ class JobQueue:
             )
             await self._send_gallery(job, files)
             # Medya ulasti; kayit/silme hatasi basarili gonderimi hataya cevirmemeli.
-            await self._finish_success(job, total, preset="gallery")
+            await self._finish_success(job, total, preset="gallery", bytes_in=total)
         except (GalleryError, DownloadError) as exc:
             await self._record(job, "error", preset="gallery")
             await self._fail(job, f"❌ {escape(str(exc))}")
@@ -1301,9 +1301,19 @@ class JobQueue:
             self._retry_jobs.pop(next(iter(self._retry_jobs)))
 
     async def _record(
-        self, job: Job, status: str, filesize: int = 0, *, preset: str | None = None
+        self,
+        job: Job,
+        status: str,
+        filesize: int = 0,
+        *,
+        preset: str | None = None,
+        bytes_in: int = 0,
     ) -> None:
-        """Istatistigi yazar; DB hatasi medya/hatalari kullaniciya yansitmasin."""
+        """Istatistigi yazar; DB hatasi medya/hatalari kullaniciya yansitmasin.
+
+        `filesize` Telegram'a yuklenen veri (upload), `bytes_in` platformdan
+        indirilen veridir. Onbellekten gonderimlerde indirme yoktur.
+        """
         try:
             await self._db.record_download(
                 job.user_id,
@@ -1312,19 +1322,27 @@ class JobQueue:
                 preset or job.preset,
                 status,
                 filesize,
+                bytes_in,
             )
         except Exception:  # noqa: BLE001 - istatistik kaydi is akisini durdurmasin
             log.exception("Indirme kaydi yazilamadi: %s", job.id)
 
     async def _finish_success(
-        self, job: Job, filesize: int, *, preset: str | None = None
+        self,
+        job: Job,
+        filesize: int,
+        *,
+        preset: str | None = None,
+        bytes_in: int | None = None,
     ) -> None:
         """Basarili gonderimden sonra kaydi yazar ve durum mesajini siler.
 
         Bu noktada medya kullaniciya ulasmistir. DB veya mesaj silme hatasi
         yuzunden isi yeniden 'hata' gibi gostermek yanlis olur.
         """
-        await self._record(job, "ok", filesize, preset=preset)
+        await self._record(
+            job, "ok", filesize, preset=preset, bytes_in=bytes_in or 0
+        )
         try:
             await self._delete(job)
         except Exception:  # noqa: BLE001 - gonderim zaten basarili

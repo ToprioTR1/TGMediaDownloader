@@ -113,12 +113,62 @@ async def cmd_admin(message: Message) -> None:
         "<b>🛠 Admin paneli</b>\n"
         "Komutlar:\n"
         "/stats — istatistikler\n"
+        "/bandwidth — aylık ve günlük trafik\n"
         "/users — son kullanıcılar\n"
         "/cache — önbellek yönetimi\n"
         "/broadcast &lt;mesaj&gt; — kullanıcılara ve gruplara duyuru\n"
         "/promote @kullanıcıadı — sınırsız günlük indirme hakkı ver\n"
         "/demote @kullanıcıadı — sınırsız hakkı geri al",
         reply_markup=admin_keyboard(),
+    )
+
+
+def _bandwidth_text(report: dict[str, Any], settings: Settings) -> str:
+    """Aylik toplam + gunluk trafik dokumu (HTML)."""
+    down = int(report.get("bytes_out") or 0)
+    up = int(report.get("bytes_in") or 0)
+    total = down + up
+    jobs = int(report.get("jobs") or 0)
+    ok_jobs = int(report.get("ok_jobs") or 0)
+    days = int(report.get("days") or 31)
+    lines = [
+        "<b>📶 Bant genişliği</b>",
+        f"Son {days} gün · {ok_jobs} başarılı / {jobs} işlem",
+        "",
+        f"⬇️ İndirilen (platformdan): <b>{human_size(up)}</b>",
+        f"⬆️ Yüklenen (Telegram'a): <b>{human_size(down)}</b>",
+        f"Σ Toplam: <b>{human_size(total)}</b>",
+    ]
+    limit = getattr(settings, "monthly_traffic_gb", 0)
+    if limit:
+        used_gb = total / (1024**3)
+        lines.append(
+            f"🎯 Aylık kota: <b>{used_gb:.1f} / {limit} GB</b> "
+            f"({used_gb * 100 / limit:.0f}%)"
+        )
+    daily = report.get("daily") or []
+    if not daily:
+        lines.extend(["", "Günlük veri yok."])
+        return "\n".join(lines)
+
+    lines.extend(["", "<b>Günlük</b>"])
+    for row in daily:
+        day = str(row.get("day") or "")[5:]
+        out_size = int(row.get("bytes_out") or 0)
+        in_size = int(row.get("bytes_in") or 0)
+        count = int(row.get("ok_jobs") or 0)
+        lines.append(
+            f"<code>{day}</code>  ⬇️ {human_size(in_size)}  "
+            f"⬆️ {human_size(out_size)}  ·  {count}"
+        )
+    return "\n".join(lines)
+
+
+@router.message(Command("bandwidth", "trafik", "bandwith"), IsAdmin())
+async def cmd_bandwidth(message: Message, db: Database, settings: Settings) -> None:
+    report = await db.bandwidth_report(days=31)
+    await message.answer(
+        _bandwidth_text(report, settings), disable_web_page_preview=True
     )
 
 

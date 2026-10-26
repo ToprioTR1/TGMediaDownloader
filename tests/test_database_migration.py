@@ -56,5 +56,48 @@ class CacheMigrationTests(unittest.IsolatedAsyncioTestCase):
                 await db.close()
 
 
+class BandwidthTests(unittest.IsolatedAsyncioTestCase):
+    async def test_report_splits_upload_and_download(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="bw-") as raw:
+            db = Database(Path(raw) / "bot.db")
+            await db.connect()
+            try:
+                await db.record_download(
+                    42, "u1", "YouTube", "h:720", "ok", 1000, 1500
+                )
+                # Onbellekten gonderim: indirme yok.
+                await db.record_download(
+                    42, "u2", "TikTok", "h:720", "ok", 500, 0
+                )
+                # Basarisiz is: islem sayisina girer, boyuta girmez.
+                await db.record_download(
+                    42, "u3", "YouTube", "h:720", "error", 0, 0
+                )
+
+                report = await db.bandwidth_report(days=31)
+                self.assertEqual(report["bytes_out"], 1500)
+                self.assertEqual(report["bytes_in"], 1500)
+                self.assertEqual(report["jobs"], 3)
+                self.assertEqual(report["ok_jobs"], 2)
+                self.assertEqual(len(report["daily"]), 1)
+                day = report["daily"][0]
+                self.assertEqual(day["bytes_out"], 1500)
+                self.assertEqual(day["bytes_in"], 1500)
+            finally:
+                await db.close()
+
+    async def test_empty_report_is_zero(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="bw-") as raw:
+            db = Database(Path(raw) / "bot.db")
+            await db.connect()
+            try:
+                report = await db.bandwidth_report()
+                self.assertEqual(report["bytes_out"], 0)
+                self.assertEqual(report["bytes_in"], 0)
+                self.assertEqual(report["daily"], [])
+            finally:
+                await db.close()
+
+
 if __name__ == "__main__":
     unittest.main()

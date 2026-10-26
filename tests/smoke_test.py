@@ -736,6 +736,30 @@ async def main() -> int:
         check(any("42" in t for t in bot.texts_since(mark)), "/users")
         print("14) /users OK")
 
+        # 14b) /bandwidth: yalnizca admin, aylik + gunluk trafik
+        mark = len(bot.calls)
+        await dp.feed_update(bot, msg_update("/bandwidth", 14))
+        bw_texts = bot.texts_since(mark)
+        check(
+            any("Bant genişliği" in t for t in bw_texts),
+            f"/bandwidth cevap vermedi: {bw_texts}",
+        )
+        check(
+            any("İndirilen" in t and "Yüklenen" in t for t in bw_texts),
+            "yükleme/indirme ayrımı yok",
+        )
+        check(
+            any("Günlük" in t for t in bw_texts),
+            "günlük döküm yok",
+        )
+        mark = len(bot.calls)
+        await dp.feed_update(bot, msg_update("/bandwidth", 15, user=OTHER))
+        check(
+            not bot.texts_since(mark),
+            "admin olmayan kullanıcı /bandwidth yanıtı aldı",
+        )
+        print("14b) /bandwidth OK")
+
         # 15) broadcast (kullanicilar + gruplar)
         group_chat = Chat(id=-100777, type="supergroup", title="Test Grubu")
         await dp.feed_update(bot, msg_update("/start", 115, chat=group_chat))
