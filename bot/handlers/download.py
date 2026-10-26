@@ -33,7 +33,14 @@ from ..config import Settings
 from ..database import Database
 from ..downloader import DownloadError, Downloader, MediaInfo
 from ..gallery import GalleryDownloader
-from ..qol import media_buttons, quality_menu, video_label
+from ..qol import (
+    error_category,
+    error_hint,
+    media_buttons,
+    quality_menu,
+    retry_keyboard,
+    video_label,
+)
 from ..queue import Job, JobQueue, QueueFullError, cached_video_kwargs
 from ..utils import (
     UNSUPPORTED_URL_TEXT,
@@ -315,20 +322,26 @@ def _message_text(message: Message) -> str:
 
 
 def _remember_probe_failure(
-    chat_id: int, user_id: int, message_id: int, text: str, url: str
+    chat_id: int,
+    user_id: int,
+    message_id: int,
+    text: str,
+    url: str,
+    *,
+    info: MediaInfo | None = None,
+    category: str | None = None,
 ) -> InlineKeyboardMarkup:
     token = uuid.uuid4().hex[:10]
     _probe_retries[token] = (chat_id, user_id, message_id, text, url)
     while len(_probe_retries) > 200:
         _probe_retries.pop(next(iter(_probe_retries)))
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="🔁 Yeniden dene", callback_data=f"retrytext|{token}"
-                )
-            ]
-        ]
+    return retry_keyboard(
+        token,
+        preset=f"h:{info.heights[0]}" if info and info.heights else None,
+        has_lower=bool(info and len(info.heights) > 1),
+        source_url=url,
+        max_upload_mb=0,
+        category=category or "generic",
     )
 
 
@@ -513,12 +526,19 @@ async def _process_text(
                     # desteklenmeyen linklerde oldugu gibi sessizce bitir.
                     await queue.delete_status(chat_id, status.message_id)
                     continue
+                category = error_category(str(exc))
                 await queue.edit_status(
                     chat_id,
                     status.message_id,
-                    f"❌ {escape(str(exc))}",
+                    f"❌ {escape(str(exc))}\n\n"
+                    f"{error_hint(category, max_upload_mb=settings.max_upload_mb)}",
                     keyboard=_remember_probe_failure(
-                        chat_id, user_id, status.message_id, text, url
+                        chat_id,
+                        user_id,
+                        status.message_id,
+                        text,
+                        url,
+                        category=category,
                     ),
                     wait=True,
                 )
@@ -610,7 +630,17 @@ async def _process_text(
             await queue.edit_status(
                 chat_id,
                 status.message_id,
-                f"❌ {escape(str(exc))}",
+                f"❌ {escape(str(exc))}\n\n"
+                f"{error_hint('size', max_upload_mb=settings.max_upload_mb)}",
+                keyboard=_remember_probe_failure(
+                    chat_id,
+                    user_id,
+                    status.message_id,
+                    text,
+                    url,
+                    info=info,
+                    category="size",
+                ),
                 wait=True,
             )
             await queue.forget_status(chat_id, status.message_id)
@@ -693,6 +723,22 @@ async def on_retry_text(
         return
 
     token = (callback.data or "").split("|", 1)[1]
+    await _retry_probe(callback, token, settings, db, downloader, gallery, queue)
+
+
+async def _retry_probe(
+    callback: CallbackQuery,
+    token: str,
+    settings: Settings,
+    db: Database,
+    downloader: Downloader,
+    gallery: GalleryDownloader,
+    queue: JobQueue,
+) -> None:
+    """Kesif (probe) hata kartindaki yeniden denemeyi isler."""
+    if callback.message is None:
+        await callback.answer()
+        return
     item = _probe_retries.get(token)
     if item is None:
         await callback.answer(
@@ -730,12 +776,22 @@ async def on_retry_text(
 
 
 @router.callback_query(F.data.startswith("retry|"))
-async def on_retry(callback: CallbackQuery, queue: JobQueue) -> None:
+async def on_retry(
+    callback: CallbackQuery,
+    settings: Settings,
+    db: Database,
+    downloader: Downloader,
+    gallery: GalleryDownloader,
+    queue: JobQueue,
+) -> None:
     if callback.message is None:
         await callback.answer()
         return
 
     job_id = (callback.data or "").split("|", 1)[1]
+    if job_id in _probe_retries:
+        await _retry_probe(callback, job_id, settings, db, downloader, gallery, queue)
+        return
     if not await queue.retry(
         job_id,
         callback.message.chat.id,

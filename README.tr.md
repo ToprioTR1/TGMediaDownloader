@@ -28,6 +28,8 @@ ile yazıldı, Docker ile çalışacak şekilde hazırlandı.
 - 🔘 Her videonun altında hızlı aksiyonlar: `🎵 Ses olarak al` ·
   `🎚 Kalite değiştir` · `📄 Dosya olarak gönder` · `🖼 Kapak fotoğrafı`;
   mümkün olduğunda yeniden indirmeden `file_id` önbelleğinden çalışır
+- 🧠 Akıllı hatalar: hataya göre yeniden dene, daha düşük kalite, dosya olarak
+  gönder veya kaynağı aç butonu ve tek satırlık bir öneri
 - 📝 Medya açıklamasındaki (caption) ve yanıtlanan mesajdaki bağlantılar da işlenir
 - 🚦 Yalnızca yt-dlp site eşleştiricisinin tanıdığı URL'ler (veya sitelerin
   resmi kısa link alan adları) işlenir; normal web sayfaları ağ isteği
@@ -427,7 +429,7 @@ python -m unittest tests.test_instagram_embed -v    # Instagram embed ayrıştı
 python -m unittest tests.test_media -v              # ffprobe/önizleme testleri (ffmpeg gerekir)
 python -m unittest tests.test_retry -v              # tek otomatik tekrar testleri
 python -m unittest tests.test_database_migration -v # eski önbellek taşıma testleri
-python -m unittest tests.test_qol -v                # aksiyon butonları
+python -m unittest tests.test_qol -v                # aksiyon butonları ve akıllı hatalar
 ```
 
 Duman testi kendi verisini `.tmp/` altında oluşturur ve Telegram'a gerçek istek

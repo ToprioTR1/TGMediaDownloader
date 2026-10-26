@@ -1,8 +1,13 @@
 import unittest
 
 from bot.qol import (
+    CATEGORY_ACCESS,
+    CATEGORY_SIZE,
     audio_label,
+    error_category,
+    error_hint,
     media_buttons,
+    retry_keyboard,
     video_codec_label,
     video_label,
 )
@@ -67,6 +72,53 @@ class MediaButtonTests(unittest.TestCase):
         self.assertEqual(audio_label(None), "MP3 192 kbps")
         self.assertEqual(video_codec_label("h264"), "H.264 (uyumlu)")
         self.assertEqual(video_codec_label("auto"), "Otomatik")
+
+
+class SmartErrorTests(unittest.TestCase):
+    def test_error_categories(self) -> None:
+        self.assertEqual(
+            error_category("Dosya 80 MB boyutunda. Telegram limiti 50 MB."),
+            CATEGORY_SIZE,
+        )
+        self.assertEqual(
+            error_category("Bu içerik için giriş gerekiyor. Çerez gerekli."),
+            CATEGORY_ACCESS,
+        )
+        self.assertEqual(
+            error_category("Platform yanıt vermedi (zaman aşımı). Tekrar deneyin."),
+            "transient",
+        )
+
+    def test_size_error_offers_lower_quality_not_document(self) -> None:
+        keyboard = retry_keyboard(
+            "job1",
+            preset="h:1080",
+            has_lower=True,
+            source_url="https://example.com/v",
+            max_upload_mb=50,
+            category=CATEGORY_SIZE,
+        )
+        callbacks = [b.callback_data for b in _buttons(keyboard)]
+        self.assertIn("retry|job1", callbacks)
+        self.assertIn("act|lower|job1", callbacks)
+        self.assertNotIn("act|asdoc|job1", callbacks)
+
+    def test_access_error_offers_document_and_source(self) -> None:
+        keyboard = retry_keyboard(
+            "job1",
+            preset="h:720",
+            has_lower=False,
+            source_url="https://example.com/v",
+            max_upload_mb=50,
+            category=CATEGORY_ACCESS,
+        )
+        callbacks = [b.callback_data for b in _buttons(keyboard)]
+        self.assertIn("act|asdoc|job1", callbacks)
+        self.assertTrue(any(b.url == "https://example.com/v" for b in _buttons(keyboard)))
+
+    def test_hints_are_category_specific(self) -> None:
+        self.assertIn("50 MB", error_hint(CATEGORY_SIZE, max_upload_mb=50))
+        self.assertIn("dosya", error_hint(CATEGORY_ACCESS, max_upload_mb=50))
 
 
 if __name__ == "__main__":

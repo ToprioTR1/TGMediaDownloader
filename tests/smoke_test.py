@@ -1190,7 +1190,7 @@ async def main() -> int:
             check(bool(retry_calls), "kesif hatasinda yeniden dene butonu yok")
             cb_data = retry_calls[-1][1]["reply_markup"].inline_keyboard[0][0].callback_data
             check(
-                (cb_data or "").startswith("retrytext|"),
+                (cb_data or "").startswith("retry|"),
                 f"kesif retry callback yanlis: {cb_data}",
             )
 
@@ -1423,8 +1423,52 @@ async def main() -> int:
             check(expected in labels, f"video butonu yok: {expected}")
         print("27) video alti butonlar OK")
 
+        # 28) akilli hata butonlari: boyut hatasi + daha dusuk kalite
+        failed = Job(
+            id="size1",
+            user_id=ADMIN.id,
+            chat_id=ADMIN.id,
+            status_message_id=0,
+            url="https://example.com/size",
+            preset="h:1080",
+            title="Buyuk",
+            platform="YouTube",
+            heights=[1080, 720, 360],
+            status_header="🎬 <b>Buyuk</b>",
+        )
+        failed_status = await queue.send_status(ADMIN.id, "boyut testi")
+        failed.status_message_id = failed_status.message_id
+        await queue._fail(
+            failed, "❌ Dosya 80 MB. Telegram limiti 50 MB. Daha düşük kalite deneyin."
+        )
+        failure_edits = [
+            c
+            for c in bot.calls
+            if c[0] == "edit_message_text"
+            and c[1].get("message_id") == failed_status.message_id
+            and c[1].get("reply_markup")
+        ]
+        check(bool(failure_edits), "boyut hata karti duzenlenmedi")
+        error_buttons = [
+            b
+            for row in failure_edits[-1][1]["reply_markup"].inline_keyboard
+            for b in row
+        ]
+        callbacks = [b.callback_data for b in error_buttons]
+        check("retry|size1" in callbacks, "boyut hatasinda retry butonu yok")
+        check(
+            "act|lower|size1" in callbacks,
+            f"boyut hatasinda dusuk kalite butonu yok: {callbacks}",
+        )
+        check(
+            "💡" in bot.texts.get(failed_status.message_id, ""),
+            "hata ipucu eklenmedi",
+        )
+        await queue.forget_status(ADMIN.id, failed_status.message_id)
+        print("28) akilli hata butonlari OK")
+
         stats = await db.stats()
-        print("28) istatistikler:", stats)
+        print("29) istatistikler:", stats)
     except AssertionError as exc:
         print("HATA:", exc)
         return 1

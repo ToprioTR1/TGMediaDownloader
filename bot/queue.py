@@ -38,14 +38,26 @@ from .downloader import DownloadError, Downloader
 from .gallery import VIDEO_EXT, GalleryDownloader, GalleryError
 from .keyboards import gallery_keyboard
 from .media import VideoMeta, inspect_video
-from .qol import media_buttons, video_label
+from .qol import (
+    error_category,
+    error_hint,
+    media_buttons,
+    retry_keyboard,
+    video_label,
+)
 from .status import (
     DEFAULT_EDIT_INTERVAL,
     DEFAULT_PROGRESS_INTERVAL,
     StatusHub,
     render_job_status,
 )
-from .utils import escape, human_size, media_cache_key, render_progress
+from .utils import (
+    escape,
+    human_size,
+    media_cache_key,
+    preset_height,
+    render_progress,
+)
 
 log = logging.getLogger(__name__)
 
@@ -72,6 +84,7 @@ class Job:
     video_height: int | None = None
     video_duration: int | None = None
     heights: list[int] = field(default_factory=list)
+    error_text: str = ""
 
     @property
     def cache_preset(self) -> str:
@@ -262,6 +275,13 @@ class JobQueue:
                 message_id,
                 render_job_status(
                     job.status_header, "error", f"❌ {escape(str(exc))}"
+                ),
+                keyboard=retry_keyboard(
+                    job.id,
+                    preset=job.preset,
+                    has_lower=False,
+                    source_url=job.source_url,
+                    max_upload_mb=self._settings.max_upload_mb,
                 ),
                 wait=True,
             )
@@ -1050,15 +1070,21 @@ class JobQueue:
         return [(job.chat_id, job.status_message_id)]
 
     def _retry_keyboard(self, job: Job) -> InlineKeyboardMarkup:
-        return InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text="🔁 Yeniden dene", callback_data=f"retry|{job.id}"
-                    )
-                ]
-            ]
+        return retry_keyboard(
+            job.id,
+            preset=job.preset,
+            has_lower=self._has_lower(job),
+            source_url=job.source_url,
+            max_upload_mb=self._settings.max_upload_mb,
+            category=error_category(job.error_text or ""),
+            can_document=job.preset != "audio",
         )
+
+    def _has_lower(self, job: Job) -> bool:
+        height = preset_height(job.preset)
+        if height is None:
+            return False
+        return any(h < height for h in job.heights)
 
     def _remember_retry(self, job: Job) -> None:
         self._retry_jobs[job.id] = job
@@ -1096,16 +1122,22 @@ class JobQueue:
             log.exception("Basarili gonderim sonrasi durum mesaji silinemedi: %s", job.id)
 
     async def _fail(self, job: Job, text: str) -> None:
+        job.error_text = text
         self._remember_retry(job)
         last_stage = job.status_stage
         job.status_stage = "error"
+        category = error_category(text)
+        hint = error_hint(
+            category, max_upload_mb=self._settings.max_upload_mb
+        )
+        detail = f"{text}\n\n{hint}" if hint and hint not in text else text
         await self._status.edit(
             job.chat_id,
             job.status_message_id,
             render_job_status(
                 job.status_header,
                 "error",
-                text,
+                detail,
                 last_stage=last_stage,
             ),
             keyboard=self._retry_keyboard(job),

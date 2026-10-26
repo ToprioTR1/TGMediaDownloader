@@ -14,7 +14,19 @@ from .utils import preset_height, quality_label
 TEXT_DOCUMENT = "📄 Dosya olarak gönder"
 TEXT_THUMBNAIL = "🖼 Kapak fotoğrafı"
 TEXT_CANCEL = "❌ İptal"
+TEXT_RETRY = "🔁 Yeniden dene"
+TEXT_LOWER = "⬇️ Daha düşük kalite dene"
 TEXT_SOURCE = "🔗 Kaynağı aç"
+
+# Hata kategorileri; akilli hata butonlarinda hangi seceneklerin
+# gosterilecegine karar vermek icin kullanilir.
+CATEGORY_SIZE = "size"
+CATEGORY_ACCESS = "access"
+CATEGORY_TRANSIENT = "transient"
+CATEGORY_GEO = "geo"
+CATEGORY_DURATION = "duration"
+CATEGORY_UNSUPPORTED = "unsupported"
+CATEGORY_GENERIC = "generic"
 
 
 def audio_label(bitrate: int | str | None) -> str:
@@ -40,6 +52,143 @@ def video_label(preset: str, bitrate: int | str | None = None) -> str:
     if preset.endswith("|doc"):
         return f"{quality_label(preset[: -len('|doc')])} · dosya"
     return quality_label(preset)
+
+
+def error_category(message: str) -> str:
+    """Hata metnini kullaniciya sunulacak buton setine esler."""
+    text = (message or "").lower()
+    if any(
+        key in text
+        for key in (
+            "boyut",
+            "limit",
+            "too big",
+            "entity too large",
+            "çok büyük",
+            "cok buyuk",
+        )
+    ):
+        return CATEGORY_SIZE
+    if any(
+        key in text
+        for key in (
+            "zaman aşımı",
+            "zaman asimi",
+            "yavaş",
+            "yavas",
+            "yanıt vermedi",
+            "yanit vermedi",
+            "geçici",
+            "gecici",
+            "sınırladı",
+            "sinirladi",
+        )
+    ):
+        return CATEGORY_TRANSIENT
+    if any(
+        key in text
+        for key in (
+            "giriş",
+            "giris",
+            "login",
+            "çerez",
+            "cerez",
+            "cookie",
+            "private",
+            "403",
+            "erişim",
+            "erisim",
+            "yetki",
+            "üye",
+            "uye",
+        )
+    ):
+        return CATEGORY_ACCESS
+    if "bölge" in text or "bolge" in text or "geo" in text:
+        return CATEGORY_GEO
+    if "uzun" in text or "süre" in text or "sure" in text:
+        return CATEGORY_DURATION
+    if "desteklenmiyor" in text or "unsupported" in text:
+        return CATEGORY_UNSUPPORTED
+    return CATEGORY_GENERIC
+
+
+def retry_keyboard(
+    item_id: str,
+    *,
+    preset: str | None,
+    has_lower: bool,
+    source_url: str | None,
+    max_upload_mb: int,
+    category: str = CATEGORY_GENERIC,
+    can_document: bool = True,
+) -> InlineKeyboardMarkup:
+    """Hata kartindaki aksiyonlar.
+
+    - Her hatada yeniden deneme,
+    - boyut hatalarinda daha dusuk kalite,
+    - erisim hatalarinda dosya olarak gonderme (yeniden indirmeden) ve
+      kaynak baglantisi,
+    - geçici hatalarda (bot destekliyorsa) daha dusuk kalite.
+    """
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text=TEXT_RETRY, callback_data=f"retry|{item_id}")]
+    ]
+    if preset and preset.startswith("h:") and has_lower:
+        if category in {CATEGORY_SIZE, CATEGORY_TRANSIENT}:
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=TEXT_LOWER,
+                        callback_data=f"act|lower|{item_id}",
+                    )
+                ]
+            )
+    if category == CATEGORY_SIZE:
+        # Boyut hatasinda dosya olarak gondermek de limiti asar; bunu onermeyiz.
+        can_document = False
+    if category in {CATEGORY_ACCESS, CATEGORY_GENERIC} and can_document:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=TEXT_DOCUMENT,
+                    callback_data=f"act|asdoc|{item_id}",
+                )
+            ]
+        )
+    if source_url and category in {
+        CATEGORY_ACCESS,
+        CATEGORY_GEO,
+        CATEGORY_UNSUPPORTED,
+        CATEGORY_GENERIC,
+    }:
+        rows.append([InlineKeyboardButton(text=TEXT_SOURCE, url=source_url)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def error_hint(
+    category: str, *, max_upload_mb: int, detail: str | None = None
+) -> str:
+    """Hata metninin altina eklenecek kisa, uygulanabilir oneri."""
+    if category == CATEGORY_SIZE:
+        return (
+            f"💡 Seçili kalite {max_upload_mb} MB limitini aşıyor. "
+            "Daha düşük kalitede deneyin."
+        )
+    if category == CATEGORY_ACCESS:
+        return (
+            "💡 Platform giriş istiyor. Herkese açık bir gönderi deneyin veya "
+            "içeriği dosya olarak almayı deneyin."
+        )
+    if category == CATEGORY_TRANSIENT:
+        return "💡 Platform geçici olarak yanıt vermedi. Birkaç dakika sonra tekrar deneyin."
+    if category == CATEGORY_GEO:
+        return "💡 İçerik bulunduğunuz bölgede kısıtlı olabilir. Kaynağı tarayıcıda deneyin."
+    if category == CATEGORY_DURATION:
+        return "💡 Daha kısa bir video veya oynatma listesi deneyin."
+    if category == CATEGORY_UNSUPPORTED:
+        return "💡 Bu bağlantı desteklenmiyor. /help ile desteklenen platformlara bakın."
+    return "💡 Sorun sürerse bağlantıyı tekrar gönderin."
 
 
 def media_buttons(
