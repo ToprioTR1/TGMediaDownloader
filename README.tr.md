@@ -513,7 +513,10 @@ kullanır ve ağ isteği yapmaz.
   döner.
 - Instagram fotoğraf/carousel, TikTok fotoğraf ve Pinterest pin gönderileri
   gallery-dl ile indirilir; video içeren gönderilerde kalite seçimi için yt-dlp
-  kullanılır. Instagram gallery-dl'yi giriş sayfasına yönlendirirse herkese açık
+  kullanılır. Tek medyalı gönderiler (bir Pinterest pini, tek fotoğraflı
+  Instagram gönderisi) videolar gibi `file_id` önbelleğine yazılır; çoklu
+  carousel/panolar yeniden indirilir çünkü bir Telegram `file_id` tek öğeyi
+  kapsar. Instagram gallery-dl'yi giriş sayfasına yönlendirirse herkese açık
   fotoğraf/carousel gönderileri embed sayfasından okunur; özel gönderiler için
   yine `cookies.txt` gerekir.
 - `file_id` önbelleği SQLite'ta tutulur (`CACHE_DAYS`, varsayılan 30 gün).

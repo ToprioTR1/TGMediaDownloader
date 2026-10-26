@@ -503,40 +503,50 @@ class JobQueue:
             await self._process_gallery(job)
             return
 
-        if self._settings.cache_days:
-            cached = await self._db.cache_get(
-                job.url, job.cache_preset, self._settings.cache_days
-            )
-            if cached is not None:
-                if self.is_cancelled(job):
-                    await self._cancelled(job)
-                    return
-                try:
-                    await self._set_stage(
-                        job, "cached", "📤 Önbellekten gönderiliyor…"
-                    )
-                    await self._send_cached(job, cached)
-                except TelegramNetworkError as exc:
-                    log.warning(
-                        "Onbellek gonderim yaniti alinamadi (%s): %s", job.id, exc
-                    )
-                    size = int(cached["filesize"] or 0)
-                    await self._record(job, "unknown", size)
-                    await self._delivery_uncertain(job)
-                    return
-                except TelegramBadRequest as exc:
-                    log.info("Onbellek gecersiz, yeniden indirilecek (%s): %s", job.id, exc)
-                    try:
-                        await self._db.cache_delete(cached["cache_key"])
-                    except Exception:  # noqa: BLE001 - onbellek temizligi indirmeyi durdurmasin
-                        log.exception("Gecersiz onbellek kaydi silinemedi: %s", job.id)
-                else:
-                    size = int(cached["filesize"] or 0)
-                    await self._finish_success(job, size)
-                    log.info("Onbellekten gonderildi: %s (%s)", job.url, human_size(size))
-                    return
+        if await self._try_cached(job):
+            return
 
         await self._download_and_send(job)
+
+    async def _try_cached(self, job: Job) -> bool:
+        """Onbellekte varsa gonderir; gonderildiyse True doner.
+
+        Hem normal videolar hem de tek medyali galeri isleri (or. Pinterest
+        pinleri) icin kullanilir.
+        """
+        if not self._settings.cache_days:
+            return False
+        cached = await self._db.cache_get(
+            job.url, job.cache_preset, self._settings.cache_days
+        )
+        if cached is None:
+            return False
+        if self.is_cancelled(job):
+            await self._cancelled(job)
+            return True
+        preset = "gallery" if job.kind == "gallery" else None
+        try:
+            await self._set_stage(job, "cached", "📤 Önbellekten gönderiliyor…")
+            await self._send_cached(job, cached)
+        except TelegramNetworkError as exc:
+            log.warning(
+                "Onbellek gonderim yaniti alinamadi (%s): %s", job.id, exc
+            )
+            size = int(cached["filesize"] or 0)
+            await self._record(job, "unknown", size, preset=preset)
+            await self._delivery_uncertain(job)
+            return True
+        except TelegramBadRequest as exc:
+            log.info("Onbellek gecersiz, yeniden indirilecek (%s): %s", job.id, exc)
+            try:
+                await self._db.cache_delete(cached["cache_key"])
+            except Exception:  # noqa: BLE001 - onbellek temizligi indirmeyi durdurmasin
+                log.exception("Gecersiz onbellek kaydi silinemedi: %s", job.id)
+            return False
+        size = int(cached["filesize"] or 0)
+        await self._finish_success(job, size, preset=preset)
+        log.info("Onbellekten gonderildi: %s (%s)", job.url, human_size(size))
+        return True
 
     # ----------------------------------------------------------------- indirme
 
@@ -685,6 +695,8 @@ class JobQueue:
         if self.is_cancelled(job):
             await self._cancelled(job)
             return
+        if await self._try_cached(job):
+            return
         if self._gallery is None or not self._gallery.available:
             await self._status.edit(
                 job.chat_id,
@@ -756,7 +768,26 @@ class JobQueue:
             await self._set_stage(
                 job, "sending", f"📤 <b>Gönderiliyor…</b> ({human_size(total)})"
             )
-            await self._send_gallery(job, files)
+            self._last_cover_path = None
+            file_id, media_type = await self._send_gallery(job, files)
+            if file_id and self._settings.cache_days:
+                try:
+                    await self._db.cache_put(
+                        media_cache_key(job.url, job.cache_preset),
+                        job.url,
+                        job.cache_preset,
+                        file_id,
+                        media_type,
+                        job.title[:200],
+                        job.platform,
+                        total,
+                        job.video_width,
+                        job.video_height,
+                        job.video_duration,
+                        self._last_cover_path,
+                    )
+                except Exception:  # noqa: BLE001 - onbellek hatasi gonderimi bozmasin
+                    log.exception("Galeri onbellegi yazilamadi: %s", job.id)
             # Medya ulasti; kayit/silme hatasi basarili gonderimi hataya cevirmemeli.
             await self._finish_success(job, total, preset="gallery", bytes_in=total)
         except (GalleryError, DownloadError) as exc:
@@ -779,7 +810,8 @@ class JobQueue:
             await asyncio.to_thread(shutil.rmtree, tmpdir, True)
             self._tmpdirs.discard(tmpdir)
 
-    async def _send_gallery(self, job: Job, files: list[Path]) -> None:
+    async def _send_gallery(self, job: Job, files: list[Path]) -> tuple[str | None, str]:
+        """Galeri medyasini gonderir; tek medyada onbellek icin file_id doner."""
         caption: str | None = None
         if job.show_caption:
             caption = (
@@ -812,14 +844,15 @@ class JobQueue:
             if len(files) == 1:
                 path = files[0]
                 for chat_id, _ in self._targets(job):
-                    await self._bot.send_document(
+                    msg = await self._bot.send_document(
                         chat_id=chat_id,
                         document=FSInputFile(path, filename=path.name),
                         caption=caption,
                         reply_markup=group_keyboard,
                         request_timeout=self._settings.upload_timeout_sec,
                     )
-                return
+                    return _file_id(msg, "document"), "document"
+                return None, "document"
 
             for chat_id, _ in self._targets(job):
                 documents: list[InputMediaDocument] = []
@@ -836,7 +869,7 @@ class JobQueue:
                     media=documents,
                     request_timeout=self._settings.upload_timeout_sec,
                 )
-            return
+            return None, "album"
 
         if len(files) == 1:
             path = files[0]
@@ -850,6 +883,13 @@ class JobQueue:
             for chat_id, _ in self._targets(job):
                 file = FSInputFile(path, filename=path.name)
                 if video_meta is not None:
+                    if video_meta.thumbnail is not None:
+                        self._last_cover_path = await asyncio.to_thread(
+                            keep_thumbnail,
+                            video_meta.thumbnail,
+                            media_cache_key(job.url, job.cache_preset),
+                            self._settings.cover_dir,
+                        )
                     video_kwargs: dict[str, Any] = {
                         "width": video_meta.width,
                         "height": video_meta.height,
@@ -860,7 +900,7 @@ class JobQueue:
                             video_meta.thumbnail,
                             filename=video_meta.thumbnail.name,
                         )
-                    await self._bot.send_video(
+                    msg = await self._bot.send_video(
                         chat_id=chat_id,
                         video=file,
                         caption=caption,
@@ -869,8 +909,9 @@ class JobQueue:
                         request_timeout=self._settings.upload_timeout_sec,
                         **video_kwargs,
                     )
-                elif path.suffix.lower() in VIDEO_EXT:
-                    await self._bot.send_video(
+                    return _file_id(msg, "video"), "video"
+                if path.suffix.lower() in VIDEO_EXT:
+                    msg = await self._bot.send_video(
                         chat_id=chat_id,
                         video=file,
                         caption=caption,
@@ -878,15 +919,16 @@ class JobQueue:
                         supports_streaming=True,
                         request_timeout=self._settings.upload_timeout_sec,
                     )
-                else:
-                    await self._bot.send_photo(
-                        chat_id=chat_id,
-                        photo=file,
-                        caption=caption,
-                        reply_markup=single_keyboard,
-                        request_timeout=self._settings.upload_timeout_sec,
-                    )
-            return
+                    return _file_id(msg, "video"), "video"
+                msg = await self._bot.send_photo(
+                    chat_id=chat_id,
+                    photo=file,
+                    caption=caption,
+                    reply_markup=single_keyboard,
+                    request_timeout=self._settings.upload_timeout_sec,
+                )
+                return _photo_file_id(msg), "photo"
+            return None, "photo"
 
         for chat_id, _ in self._targets(job):
             media: list[InputMediaPhoto | InputMediaVideo] = []
@@ -928,6 +970,7 @@ class JobQueue:
                 media=media,
                 request_timeout=self._settings.upload_timeout_sec,
             )
+        return None, "album"
 
     # ------------------------------------------------------------- gonderim
 
@@ -954,18 +997,20 @@ class JobQueue:
         media_type = row["media_type"]
         size = int(row["filesize"] or 0)
         caption = self._caption(job, size)
-        keyboard = (
-            self._media_keyboard(
+        if job.kind == "gallery":
+            # Galeri kayitlari icin kalite/ses aksiyonlari anlamsiz; sadece kaynak.
+            keyboard = gallery_keyboard(job.source_url)
+        elif self._settings.cache_days:
+            keyboard = self._media_keyboard(
                 job,
                 row["cache_key"],
-                can_audio=media_type != "audio",
+                can_audio=media_type == "video",
                 can_document=media_type == "video",
                 can_thumbnail=media_type == "video",
-                can_quality=media_type != "audio" and bool(row.get("height")),
+                can_quality=media_type == "video" and bool(row.get("height")),
             )
-            if self._settings.cache_days
-            else gallery_keyboard(job.source_url)
-        )
+        else:
+            keyboard = gallery_keyboard(job.source_url)
         for chat_id, _ in self._targets(job):
             if media_type == "audio":
                 await self._bot.send_audio(
@@ -979,6 +1024,14 @@ class JobQueue:
                 await self._bot.send_document(
                     chat_id=chat_id,
                     document=row["file_id"],
+                    caption=caption,
+                    reply_markup=keyboard,
+                    request_timeout=self._settings.upload_timeout_sec,
+                )
+            elif media_type == "photo":
+                await self._bot.send_photo(
+                    chat_id=chat_id,
+                    photo=row["file_id"],
                     caption=caption,
                     reply_markup=keyboard,
                     request_timeout=self._settings.upload_timeout_sec,
@@ -1193,10 +1246,13 @@ class JobQueue:
         if not job.show_caption:
             return None
         title = escape(job.title[:200])
-        label = video_label(
-            job.cache_preset,
-            bitrate=job.audio_bitrate,
-        )
+        if job.kind == "gallery":
+            label = "medya"
+        else:
+            label = video_label(
+                job.cache_preset,
+                bitrate=job.audio_bitrate,
+            )
         lines = f"<b>{title}</b>\n{job.platform} · {label} · {human_size(size)}"
         if job.playlist_total > 1 and job.playlist_index:
             lines += f"\n📚 Oynatma listesi {job.playlist_index}/{job.playlist_total}"
@@ -1544,6 +1600,14 @@ def cached_video_kwargs(
 def _file_id(message: Message, kind: str) -> str | None:
     media = getattr(message, kind, None)
     return getattr(media, "file_id", None)
+
+
+def _photo_file_id(message: Message) -> str | None:
+    """Telegram fotograf boyutlari listesinden en buyuk file_id'yi alir."""
+    photos = getattr(message, "photo", None) or []
+    if not photos:
+        return None
+    return getattr(photos[-1], "file_id", None)
 
 
 def _remove_orphan_covers(directory: Path, referenced: set[str]) -> int:

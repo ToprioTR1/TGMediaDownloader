@@ -522,9 +522,12 @@ make no network requests.
   the bot falls back to the previous behavior.
 - Instagram photo/carousel, TikTok photo and Pinterest pin posts are downloaded
   with gallery-dl; for posts that contain video, yt-dlp is used for quality
-  selection. If Instagram redirects gallery-dl to its login page, public
-  photo/carousel posts are read from the Instagram embed page instead; private
-  posts still require `cookies.txt`.
+  selection. Single-media posts (a Pinterest pin, a one-photo Instagram post)
+  are stored in the `file_id` cache like videos; multi-item carousels/boards are
+  re-downloaded because a Telegram `file_id` covers one item. If Instagram
+  redirects gallery-dl to its login page, public photo/carousel posts are read
+  from the Instagram embed page instead; private posts still require
+  `cookies.txt`.
 - The `file_id` cache is stored in SQLite (`CACHE_DAYS`, 30 days by default).
   If Telegram rejects a file, the cache entry is removed automatically and the
   media is downloaded again. Old entries are pruned at startup, and admins can

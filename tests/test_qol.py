@@ -591,6 +591,101 @@ class _VideoBot(_FakeBot):
         )
 
 
+class _GalleryBot(_FakeBot):
+    def __init__(self) -> None:
+        super().__init__()
+        self.photos = 0
+        self.cached_photos = 0
+
+    async def send_photo(self, **kwargs):
+        self.photos += 1
+        photo = kwargs.get("photo")
+        if isinstance(photo, str):
+            self.cached_photos += 1
+        return SimpleNamespace(
+            message_id=1,
+            photo=[SimpleNamespace(file_id="photo_file_id")],
+        )
+
+
+class _OnePhotoGallery:
+    available = True
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def download(self, _url: str, outdir: Path) -> list[Path]:
+        self.calls += 1
+        target = outdir / "pin.jpg"
+        target.write_bytes(b"jpeg")
+        return [target]
+
+
+class GalleryCacheTests(unittest.IsolatedAsyncioTestCase):
+    async def test_single_gallery_photo_is_cached(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="gcache-") as raw:
+            db = Database(Path(raw) / "bot.db")
+            await db.connect()
+            settings = SimpleNamespace(
+                concurrency=1,
+                download_dir=Path(raw),
+                max_queue_per_user=5,
+                daily_limit=0,
+                cache_days=30,
+                max_upload_bytes=50 * 1024 * 1024,
+                max_upload_mb=50,
+                upload_timeout_sec=30,
+                gallery_enabled=True,
+                playlist_limit=5,
+                playlist_max_total_sec=1800,
+                monthly_traffic_gb=0,
+                admin_ids=frozenset(),
+            )
+            bot = _GalleryBot()
+            gallery = _OnePhotoGallery()
+            queue = JobQueue(
+                bot, db, settings, SimpleNamespace(), gallery
+            )  # type: ignore[arg-type]
+            url = "https://www.pinterest.com/pin/123/"
+            try:
+                first = Job(
+                    id="g1",
+                    user_id=42,
+                    chat_id=42,
+                    status_message_id=1,
+                    url=url,
+                    preset="gallery",
+                    title="Pin",
+                    platform="Pinterest",
+                    kind="gallery",
+                    source_url=url,
+                )
+                await queue._process_gallery(first)
+                cached = await db.cache_get(url, "gallery", 30)
+                self.assertIsNotNone(cached)
+                assert cached is not None
+                self.assertEqual(cached["media_type"], "photo")
+                self.assertEqual(cached["file_id"], "photo_file_id")
+
+                second = Job(
+                    id="g2",
+                    user_id=42,
+                    chat_id=42,
+                    status_message_id=2,
+                    url=url,
+                    preset="gallery",
+                    title="Pin",
+                    platform="Pinterest",
+                    kind="gallery",
+                    source_url=url,
+                )
+                await queue._process_gallery(second)
+                self.assertEqual(gallery.calls, 1, "ikinci kez indirildi")
+                self.assertEqual(bot.cached_photos, 1, "onbellekten gonderilmedi")
+            finally:
+                await db.close()
+
+
 class MonthlyQuotaTests(unittest.IsolatedAsyncioTestCase):
     async def _setup(self, raw: str, used_mb: int):
         db = Database(Path(raw) / "bot.db")
