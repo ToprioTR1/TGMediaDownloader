@@ -235,6 +235,17 @@ def quality_label(preset: str) -> str:
     return "en iyi kalite"
 
 
+def preset_height(preset: str) -> int | None:
+    """`h:720` benzeri preset'ten yuksekligi okur; yoksa None."""
+    if not preset.startswith("h:"):
+        return None
+    try:
+        height = int(preset.split(":", 1)[1])
+    except (IndexError, ValueError):
+        return None
+    return height if height > 0 else None
+
+
 def render_progress(state: dict) -> str:
     """yt-dlp ilerleme sozlugunden kullaniciya gosterilecek metni uretir."""
     if state.get("status") == "finished":

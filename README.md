@@ -29,7 +29,9 @@ Built with Python 3.12 + [aiogram 3](https://github.com/aiogram/aiogram) +
   JPEG thumbnail are sent with every video, so larger videos are not shown as a
   square tile
 - ⚙️ Per-user defaults via `/ayar`: target quality, audio-only links, captions
-- 🔘 `🔗 Source` · `🎵 Get audio` buttons under videos
+- 🔘 Quick actions under every video: `🎵 Get audio` · `🎚 Change quality` ·
+  `📄 Send as file` · `🖼 Cover photo`, all served from the `file_id` cache
+  without re-downloading when possible
 - 📝 Links in media captions and in replied-to messages are processed too
 - 🚦 Only URLs matched by a yt-dlp site extractor (or a site's official
   short-link host) are processed; generic web pages are ignored locally
@@ -435,6 +437,7 @@ python -m unittest tests.test_instagram_embed -v    # Instagram embed parser tes
 python -m unittest tests.test_media -v              # ffprobe/thumbnail tests (ffmpeg required)
 python -m unittest tests.test_retry -v              # one-retry behavior tests
 python -m unittest tests.test_database_migration -v # old cache migration tests
+python -m unittest tests.test_qol -v                # action buttons
 ```
 
 The smoke test creates its own data under `.tmp/` and does not make real requests

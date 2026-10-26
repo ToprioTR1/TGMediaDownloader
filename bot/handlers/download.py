@@ -33,7 +33,7 @@ from ..config import Settings
 from ..database import Database
 from ..downloader import DownloadError, Downloader, MediaInfo
 from ..gallery import GalleryDownloader
-from ..keyboards import media_keyboard
+from ..qol import media_buttons, quality_menu, video_label
 from ..queue import Job, JobQueue, QueueFullError, cached_video_kwargs
 from ..utils import (
     UNSUPPORTED_URL_TEXT,
@@ -43,6 +43,7 @@ from ..utils import (
     human_size,
     is_blocked_url,
     parse_quality,
+    preset_height,
     wants_audio,
     wants_document,
 )
@@ -193,6 +194,8 @@ def _info_text(
     lines = [f"🎬 <b>{escape(info.title[:200])}</b>", " • ".join(meta)]
     if info.heights:
         lines.append("📐 Mevcut: " + ", ".join(f"{h}p" for h in info.heights[:6]))
+    if info.estimated_sizes and chosen and info.estimated_sizes.get(chosen):
+        lines.append(f"📦 Tahmini: ~{human_size(info.estimated_sizes[chosen])}")
     lines.append("")
 
     if preset == "audio":
@@ -751,8 +754,14 @@ async def on_retry(callback: CallbackQuery, queue: JobQueue) -> None:
 async def _resend_cached(bot: Bot, chat_id: int, row: dict, timeout: int) -> None:
     caption = f"<b>{escape((row.get('title') or 'Medya')[:200])}</b>"
     media_type = row["media_type"]
-    keyboard = media_keyboard(
-        row.get("url"), row["cache_key"], allow_audio=media_type != "audio"
+    keyboard = media_buttons(
+        source_url=row.get("url"),
+        cache_key=row["cache_key"],
+        can_audio=media_type != "audio",
+        can_document=media_type == "video",
+        can_thumbnail=media_type == "video",
+        can_quality=media_type != "audio" and bool(row.get("height")),
+        in_group=chat_id < 0,
     )
     if media_type == "audio":
         await bot.send_audio(
@@ -780,6 +789,110 @@ async def _resend_cached(bot: Bot, chat_id: int, row: dict, timeout: int) -> Non
             request_timeout=timeout,
             **cached_video_kwargs(row),
         )
+
+
+async def _send_cover(
+    bot: Bot, chat_id: int, message: Message, row: dict, timeout: int
+) -> bool:
+    """Videonun onizleme/gorselini 'kapak' olarak gonderir (yeniden indirmez)."""
+    thumb = getattr(message, "video", None)
+    thumb = getattr(thumb, "thumbnail", None) if thumb is not None else None
+    if thumb is None:
+        return False
+    await bot.send_photo(
+        chat_id=chat_id,
+        photo=thumb.file_id,
+        caption=f"🖼 <b>{escape((row.get('title') or 'Kapak')[:200])}</b>",
+        request_timeout=timeout,
+    )
+    return True
+
+
+def _quality_job_for(
+    row: dict, user_id: int, preset: str, heights: list[int] | None = None
+) -> Job:
+    platform = row.get("platform") or "Medya"
+    title = row.get("title") or "Medya"
+    if preset == "audio":
+        header = f"🎵 <b>{escape(title[:200])}</b>\n{escape(platform)} · MP3"
+    else:
+        header = (
+            f"🎬 <b>{escape(title[:200])}</b>\n{escape(platform)} · "
+            f"{video_label(preset)}"
+        )
+    return Job(
+        id=uuid.uuid4().hex[:10],
+        user_id=user_id,
+        chat_id=0,
+        status_message_id=0,
+        url=row["url"],
+        preset=preset,
+        title=title,
+        platform=platform,
+        source_url=row.get("url"),
+        status_header=header,
+        heights=list(heights or []),
+    )
+
+
+async def _queue_with_status(
+    callback: CallbackQuery,
+    *,
+    db: Database,
+    settings: Settings,
+    queue: JobQueue,
+    preset: str,
+    row: dict,
+    heights: list[int] | None = None,
+    as_document_override: bool | None = None,
+    origin_message: Message | None = None,
+) -> None:
+    """Onbellekteki medyadan yeni bir indirme (kalite/ses/dosya) baslatir."""
+    error = await _limit_error(callback.from_user.id, db, settings, queue)
+    if error:
+        await callback.answer(error, show_alert=True)
+        return
+    chat_id = callback.message.chat.id
+    user = await db.get_user(callback.from_user.id) or {}
+    job = _quality_job_for(row, callback.from_user.id, preset, heights=heights)
+    job.chat_id = chat_id
+    job.show_caption = bool(user.get("show_caption", 1))
+    if as_document_override is not None:
+        job.as_document = as_document_override
+    elif preset.endswith("|doc"):
+        job.as_document = True
+    else:
+        job.as_document = str(user.get("download_mode") or "video") == "document"
+    job.audio_bitrate = int(user.get("audio_bitrate") or 192)
+    job.video_codec = str(user.get("video_codec") or "auto")
+    status = await queue.send_status(chat_id, "⬇️ <b>Hazırlanıyor…</b>")
+    job.status_message_id = status.message_id
+    try:
+        queued = await queue.submit(job)
+    except QueueFullError as exc:
+        await queue.edit_status(
+            chat_id, status.message_id, f"❌ {escape(str(exc))}", wait=True
+        )
+        await queue.forget_status(chat_id, status.message_id)
+        await callback.answer(str(exc), show_alert=True)
+        return
+    if not queued:
+        await queue.delete_status(chat_id, status.message_id)
+    await callback.answer("Sıraya alındı ⏳" if queued else "Bu içerik zaten indiriliyor ⏳")
+    if origin_message is not None:
+        with contextlib.suppress(TelegramBadRequest):
+            await origin_message.edit_reply_markup(reply_markup=None)
+
+
+def _quality_heights(row: dict) -> list[int]:
+    """Onbellek satirindaki preset'ten yola cikip kalite listesi uretir."""
+    current = preset_height(row.get("preset") or "")
+    if current is None:
+        return []
+    base = [144, 240, 360, 480, 720, 1080, 1440, 2160]
+    heights = {h for h in base if h <= current}
+    heights.add(current)
+    return sorted(heights, reverse=True)
 
 
 @router.callback_query(F.data.startswith("act|"))
@@ -843,60 +956,103 @@ async def on_action(
         await callback.answer("Gönderildi 🔁")
         return
 
-    if action == "audio":
-        error = await _limit_error(callback.from_user.id, db, settings, queue)
-        if error:
-            await callback.answer(error, show_alert=True)
-            return
-        chat_id = callback.message.chat.id
-        status = await queue.send_status(chat_id, "🎵 <b>Ses hazırlanıyor…</b>")
-        user = await db.get_user(callback.from_user.id) or {}
-        title = row.get("title") or "Ses"
-        platform = row.get("platform") or "Medya"
-        job = Job(
-            id=uuid.uuid4().hex[:10],
-            user_id=callback.from_user.id,
-            chat_id=chat_id,
-            status_message_id=status.message_id,
-            url=row["url"],
-            preset="audio",
-            title=title,
-            platform=platform,
-            source_url=row.get("url"),
-            show_caption=bool(user.get("show_caption", 1)),
-            status_header=(
-                f"🎵 <b>{escape(title[:200])}</b>\n{escape(platform)} • MP3"
-            ),
+    if action == "cover":
+        shown = await _send_cover(
+            callback.bot,
+            callback.message.chat.id,
+            callback.message,
+            row,
+            settings.upload_timeout_sec,
         )
-        try:
-            queued = await queue.submit(job)
-        except QueueFullError as exc:
-            await queue.edit_status(
-                chat_id,
-                status.message_id,
-                f"❌ {escape(str(exc))}",
-                wait=True,
-            )
-            await queue.forget_status(chat_id, status.message_id)
-            await callback.answer(str(exc), show_alert=True)
-            return
-        except Exception:  # noqa: BLE001 - DB/kuyruk hatasi mesaji asili birakmasin
-            log.exception("Ses isi kuyruga alinamadi: %s", job.url)
-            await queue.edit_status(
-                chat_id,
-                status.message_id,
-                "❌ İşlem sıraya alınamadı. Lütfen tekrar deneyin.",
-                wait=True,
-            )
-            await queue.forget_status(chat_id, status.message_id)
-            await callback.answer(
-                "İşlem sıraya alınamadı. Lütfen tekrar deneyin.", show_alert=True
-            )
-            return
-        if not queued:
-            await queue.delete_status(chat_id, status.message_id)
         await callback.answer(
-            "Sıraya alındı 🎵" if queued else "Bu içerik zaten indiriliyor ⏳"
+            "Kapak gönderildi 🖼" if shown else "Bu videoda kapak görseli yok."
+        )
+        return
+
+    if action == "qmenu":
+        await callback.answer()
+        with contextlib.suppress(TelegramBadRequest):
+            await callback.message.edit_reply_markup(
+                reply_markup=quality_menu(row.get("preset") or "", _quality_heights(row))
+            )
+        return
+
+    if action == "qclose":
+        await callback.answer()
+        with contextlib.suppress(TelegramBadRequest):
+            await callback.message.edit_reply_markup(
+                reply_markup=media_buttons(
+                    source_url=row.get("url"),
+                    cache_key=key,
+                    can_audio=row.get("media_type") != "audio",
+                    can_document=row.get("media_type") == "video",
+                    can_thumbnail=row.get("media_type") == "video",
+                    can_quality=row.get("media_type") != "audio",
+                    in_group=callback.message.chat.id < 0,
+                )
+            )
+        return
+
+    if action == "quality":
+        preset = "audio" if key == "mp3" else f"h:{key}"
+        await _queue_with_status(
+            callback,
+            db=db,
+            settings=settings,
+            queue=queue,
+            preset=preset,
+            row=row,
+            heights=_quality_heights(row),
+            origin_message=callback.message,
+        )
+        return
+
+    if action in {"higher", "lower", "asdoc"}:
+        heights = _quality_heights(row)
+        current = preset_height(row.get("preset") or "")
+        if action == "asdoc":
+            new_preset = row.get("preset") or "best"
+            new_preset += "|doc"
+            override = True
+        else:
+            if current is None:
+                await callback.answer("Bu içerik için kalite bilgisi yok.")
+                return
+            if action == "higher":
+                options = [h for h in heights if h > current]
+                new_preset = f"h:{min(options)}" if options else ""
+            else:
+                options = [h for h in heights if h < current]
+                new_preset = f"h:{max(options)}" if options else ""
+            override = None
+            if not new_preset:
+                await callback.answer(
+                    "Daha yüksek kalite yok."
+                    if action == "higher"
+                    else "Daha düşük kalite yok."
+                )
+                return
+        await _queue_with_status(
+            callback,
+            db=db,
+            settings=settings,
+            queue=queue,
+            preset=new_preset,
+            row=row,
+            heights=heights,
+            as_document_override=override,
+        )
+        return
+
+    if action == "audio":
+        await _queue_with_status(
+            callback,
+            db=db,
+            settings=settings,
+            queue=queue,
+            preset="audio",
+            row=row,
+            heights=_quality_heights(row),
         )
         return
 

@@ -36,15 +36,16 @@ from .config import Settings
 from .database import Database
 from .downloader import DownloadError, Downloader
 from .gallery import VIDEO_EXT, GalleryDownloader, GalleryError
-from .keyboards import gallery_keyboard, media_keyboard
+from .keyboards import gallery_keyboard
 from .media import VideoMeta, inspect_video
+from .qol import media_buttons, video_label
 from .status import (
     DEFAULT_EDIT_INTERVAL,
     DEFAULT_PROGRESS_INTERVAL,
     StatusHub,
     render_job_status,
 )
-from .utils import escape, human_size, media_cache_key, quality_label, render_progress
+from .utils import escape, human_size, media_cache_key, render_progress
 
 log = logging.getLogger(__name__)
 
@@ -70,6 +71,7 @@ class Job:
     video_width: int | None = None
     video_height: int | None = None
     video_duration: int | None = None
+    heights: list[int] = field(default_factory=list)
 
     @property
     def cache_preset(self) -> str:
@@ -606,12 +608,30 @@ class JobQueue:
         caption: str | None = None
         if job.show_caption:
             caption = (
-                f"<b>{escape(job.title[:150])}</b>\n{job.platform} • {len(files)} medya"
+                f"<b>{escape(job.title[:150])}</b>\n{job.platform} · {len(files)} medya"
             )
-            if len(files) > 1 and job.source_url:
-                # Albumlerde buton desteklenmiyor; kaynak linkini aciklamaya koy.
-                caption += f'\n<a href="{escape(job.source_url)}">🔗 Kaynak</a>'
-        keyboard = gallery_keyboard(job.source_url)
+        group_keyboard = gallery_keyboard(job.source_url)
+        single_keyboard: Any = group_keyboard
+        only_path = files[0] if len(files) == 1 else None
+        if (
+            only_path is not None
+            and self._settings.cache_days
+            and not job.as_document
+            and only_path.suffix.lower() in VIDEO_EXT
+        ):
+            single_keyboard = self._media_keyboard(
+                job,
+                media_cache_key(job.url, f"{job.preset}|media"),
+                can_audio=True,
+                can_document=True,
+                can_thumbnail=True,
+                can_quality=bool(job.heights),
+            )
+        if len(files) > 1 and job.source_url and job.show_caption:
+            # Albumlerde buton desteklenmez; kaynak linkini aciklamaya koy.
+            caption = (caption or "") + (
+                f'\n<a href="{escape(job.source_url)}">🔗 Kaynak</a>'
+            )
 
         if job.as_document:
             if len(files) == 1:
@@ -621,7 +641,7 @@ class JobQueue:
                         chat_id=chat_id,
                         document=FSInputFile(path, filename=path.name),
                         caption=caption,
-                        reply_markup=keyboard,
+                        reply_markup=group_keyboard,
                         request_timeout=self._settings.upload_timeout_sec,
                     )
                 return
@@ -648,6 +668,10 @@ class JobQueue:
             video_meta: VideoMeta | None = None
             if path.suffix.lower() in VIDEO_EXT:
                 video_meta = await self._inspect_video(path)
+                if video_meta is not None:
+                    job.video_width = video_meta.width
+                    job.video_height = video_meta.height
+                    job.video_duration = video_meta.duration
             for chat_id, _ in self._targets(job):
                 file = FSInputFile(path, filename=path.name)
                 if video_meta is not None:
@@ -665,7 +689,7 @@ class JobQueue:
                         chat_id=chat_id,
                         video=file,
                         caption=caption,
-                        reply_markup=keyboard,
+                        reply_markup=single_keyboard,
                         supports_streaming=True,
                         request_timeout=self._settings.upload_timeout_sec,
                         **video_kwargs,
@@ -675,7 +699,7 @@ class JobQueue:
                         chat_id=chat_id,
                         video=file,
                         caption=caption,
-                        reply_markup=keyboard,
+                        reply_markup=single_keyboard,
                         supports_streaming=True,
                         request_timeout=self._settings.upload_timeout_sec,
                     )
@@ -684,7 +708,7 @@ class JobQueue:
                         chat_id=chat_id,
                         photo=file,
                         caption=caption,
-                        reply_markup=keyboard,
+                        reply_markup=single_keyboard,
                         request_timeout=self._settings.upload_timeout_sec,
                     )
             return
@@ -732,13 +756,38 @@ class JobQueue:
 
     # ------------------------------------------------------------- gonderim
 
+    def _media_keyboard(
+        self,
+        job: Job,
+        cache_key: str,
+        *,
+        can_audio: bool,
+        can_document: bool,
+        can_thumbnail: bool,
+        can_quality: bool,
+    ) -> Any:
+        return media_buttons(
+            source_url=job.source_url,
+            cache_key=cache_key,
+            can_audio=can_audio,
+            can_document=can_document,
+            can_thumbnail=can_thumbnail,
+            can_quality=can_quality,
+            in_group=job.chat_id < 0,
+        )
+
     async def _send_cached(self, job: Job, row: dict[str, Any]) -> None:
         media_type = row["media_type"]
         size = int(row["filesize"] or 0)
         caption = self._caption(job, size)
         keyboard = (
-            media_keyboard(
-                job.source_url, row["cache_key"], allow_audio=media_type != "audio"
+            self._media_keyboard(
+                job,
+                row["cache_key"],
+                can_audio=media_type != "audio",
+                can_document=media_type == "video",
+                can_thumbnail=media_type == "video",
+                can_quality=media_type != "audio" and bool(row.get("height")),
             )
             if self._settings.cache_days
             else gallery_keyboard(job.source_url)
@@ -780,10 +829,15 @@ class JobQueue:
             ".opus",
         }
         keyboard = (
-            media_keyboard(
-                job.source_url,
+            self._media_keyboard(
+                job,
                 media_cache_key(job.url, job.cache_preset),
-                allow_audio=not is_audio,
+                can_audio=not is_audio,
+                can_document=not is_audio and not job.as_document,
+                can_thumbnail=not is_audio
+                and not job.as_document
+                and path.suffix.lower() in VIDEO_EXT,
+                can_quality=not is_audio and bool(job.heights),
             )
             if self._settings.cache_days
             else gallery_keyboard(job.source_url)
@@ -852,6 +906,7 @@ class JobQueue:
                         caption=caption,
                         duration=job.duration or 0,
                         title=job.title[:64],
+                        performer=job.platform[:64],
                         reply_markup=keyboard,
                         request_timeout=self._settings.upload_timeout_sec,
                     )
@@ -908,10 +963,8 @@ class JobQueue:
         if not job.show_caption:
             return None
         title = escape(job.title[:200])
-        return (
-            f"<b>{title}</b>\n"
-            f"{job.platform} • {quality_label(job.preset)} • {human_size(size)}"
-        )
+        label = video_label(job.cache_preset)
+        return f"<b>{title}</b>\n{job.platform} · {label} · {human_size(size)}"
 
     # --------------------------------------------------------------- yardimci
 

@@ -215,6 +215,19 @@ class FakeBot:
             ],
         )
 
+    async def edit_message_reply_markup(self, chat_id=None, message_id=None, **kwargs):
+        self.calls.append(
+            (
+                "edit_message_reply_markup",
+                {
+                    "chat_id": chat_id,
+                    "message_id": message_id,
+                    "reply_markup": kwargs.get("reply_markup"),
+                },
+            )
+        )
+        return self._msg(chat_id or 0, text="markup")
+
     async def send_media_group(self, chat_id, media, **kwargs):
         self.calls.append(
             ("send_media_group", {"chat_id": chat_id, "count": len(media), **kwargs})
@@ -425,7 +438,10 @@ async def main() -> int:
         await dp.feed_update(bot, msg_update(URL, 2))
         await asyncio.wait_for(queue._queue.join(), timeout=180)
         media = bot.media_since(mark)
-        check(bool(media), "medya gonderilmedi: " + str(bot.texts_since(mark, "edit_message_text")))
+        check(
+            bool(media),
+            "medya gonderilmedi: " + str(bot.texts_since(mark, "edit_message_text")),
+        )
         check(
             f"{tiktok_height}p" in (media[0][1].get("caption") or ""),
             f"varsayilan kalite uygulanmadi: {media[0][1].get('caption')}",
@@ -1389,8 +1405,26 @@ async def main() -> int:
         await queue.delete_status(ADMIN.id, status.message_id)
         print("26) gonderim zaman asimi OK")
 
+        # 27) medya alti hizli aksiyonlar
+        cached_media = [m for m in bot.calls if m[0] == "send_video"]
+        check(bool(cached_media), "aksiyon testi icin video yok")
+        buttons = [
+            b
+            for row in (cached_media[-1][1]["reply_markup"].inline_keyboard or [])
+            for b in row
+        ]
+        labels = [b.text for b in buttons]
+        for expected in (
+            "🎵 Ses olarak al",
+            "🎚 Kalite değiştir",
+            "📄 Dosya olarak gönder",
+            "🖼 Kapak fotoğrafı",
+        ):
+            check(expected in labels, f"video butonu yok: {expected}")
+        print("27) video alti butonlar OK")
+
         stats = await db.stats()
-        print("27) istatistikler:", stats)
+        print("28) istatistikler:", stats)
     except AssertionError as exc:
         print("HATA:", exc)
         return 1
