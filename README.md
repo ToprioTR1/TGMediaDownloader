@@ -28,14 +28,17 @@ Built with Python 3.12 + [aiogram 3](https://github.com/aiogram/aiogram) +
 - 📐 Correct Telegram aspect ratio: the real width, height, duration, and a small
   JPEG thumbnail are sent with every video, so larger videos are not shown as a
   square tile
-- ⚙️ Per-user defaults via `/ayar`: target quality, audio-only links, captions
+- ⚙️ Per-user defaults via `/ayar`: target quality, audio-only links, captions,
+  MP3 bitrate, H.264 compatibility mode and video/document delivery
 - 🔘 Quick actions under every video: `🎵 Get audio` · `🎚 Change quality` ·
   `📄 Send as file` · `🖼 Cover photo`, all served from the `file_id` cache
   without re-downloading when possible
 - 🧠 Smart errors: depending on the failure the card offers retry, a lower
   quality, sending as a file, or opening the source, with a one-line hint
-- 🕒 Queue position (`🕒 2/3`) so you can see where a waiting download is
-- ❌ `Cancel` button while a job is waiting or downloading
+- 🕒 Queue position (`🕒 2/3`) and a `❌ Cancel` button while a job is waiting
+  or downloading
+- 📚 Playlist support: a playlist link first asks how many videos to queue
+  (first few / more / all as MP3), then processes them one by one
 - 📝 Links in media captions and in replied-to messages are processed too
 - 🚦 Only URLs matched by a yt-dlp site extractor (or a site's official
   short-link host) are processed; generic web pages are ignored locally
@@ -441,7 +444,7 @@ python -m unittest tests.test_instagram_embed -v    # Instagram embed parser tes
 python -m unittest tests.test_media -v              # ffprobe/thumbnail tests (ffmpeg required)
 python -m unittest tests.test_retry -v              # one-retry behavior tests
 python -m unittest tests.test_database_migration -v # old cache migration tests
-python -m unittest tests.test_qol -v                # buttons, smart errors, queue and cancel
+python -m unittest tests.test_qol -v                # buttons, smart errors, queue, playlists
 ```
 
 The smoke test creates its own data under `.tmp/` and does not make real requests
@@ -484,11 +487,14 @@ make no network requests.
 - Probes, video downloads, and gallery downloads are attempted twice
   automatically. The second failure shows the normal error and the manual retry
   button. Unsupported URLs are still ignored silently without a retry.
-- Queue positions are computed from the jobs still waiting for a worker, so a
-  job shows `🕒 2/3` while it waits and a progress line once it starts.
-- The `❌ Cancel` button stops a waiting job immediately; a running yt-dlp
-  download is stopped at the next progress callback and its temporary directory
-  is removed. Cancelled jobs are not recorded as errors.
+- Queue positions are computed from the jobs still waiting for a worker. The
+  `❌ Cancel` button stops a waiting job immediately; a running yt-dlp download
+  is stopped at the next progress callback and its temporary directory is
+  removed. Cancelled jobs are not recorded as errors.
+- Playlists are capped by `PLAYLIST_LIMIT` (default 5, max 20) and by
+  `PLAYLIST_MAX_TOTAL_SEC` (default 30 minutes, `0` = unlimited). Videos in a
+  playlist are queued as normal jobs, so the per-user queue and daily limits
+  still apply.
 - Media uploads use `UPLOAD_TIMEOUT_SEC` (600 seconds by default). If Telegram
   does not answer in time, the bot does **not** resend automatically, because the
   file may already have arrived and a retry could duplicate it. Instead it shows

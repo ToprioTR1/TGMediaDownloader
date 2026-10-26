@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from aiogram import Bot, Router
+import contextlib
+
+from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (
     CallbackQuery,
@@ -14,6 +17,7 @@ from aiogram.types import (
 
 from ..config import Settings
 from ..database import Database
+from ..qol import audio_label, download_mode_label, video_codec_label
 from ..queue import JobQueue
 from ..utils import escape, human_size
 
@@ -115,7 +119,12 @@ def _help_text(settings: Settings) -> str:
         "otomatik olarak bir alt kaliteye iner.\n\n"
         "<b>⚙️ Kişisel ayarlar</b>\n"
         "<code>/ayar</code> ile varsayılan kaliteyi, ses tercihini ve caption "
-        "gösterimini değiştirebilirsiniz.\n\n"
+        "gösterimini değiştirebilirsiniz. Aynı ekrandan MP3 kalitesi, H.264 "
+        "uyumluluk modu ve dosya/video gönderim tercihi de seçilir.\n\n"
+        "<b>📚 Oynatma listeleri</b>\n"
+        "YouTube gibi platformlarda bir liste bağlantısı gönderdiğinizde bot "
+        "önce kaç video indirileceğini sorar. İlk birkaç videoyu, daha fazlasını "
+        "veya hepsini MP3 olarak seçebilirsiniz.\n\n"
         "<b>🖼 Instagram / TikTok fotoğraf</b>\n"
         "Instagram fotoğraf/carousel ve TikTok fotoğraf gönderileri de "
         "indirilir; fotoğraflar albüm olarak gönderilir "
@@ -162,17 +171,97 @@ def _settings_text(user: dict) -> str:
     quality = int(user.get("default_quality") or 0)
     audio = bool(user.get("audio_default"))
     caption = bool(user.get("show_caption", 1))
+    bitrate = int(user.get("audio_bitrate") or 192)
+    codec = str(user.get("video_codec") or "auto")
+    mode = str(user.get("download_mode") or "video")
     return (
         "<b>⚙️ Kişisel ayarlar</b>\n"
         f"🎯 Varsayılan kalite: <b>{f'{quality}p' if quality else 'platform varsayılanı'}</b>\n"
-        f"🎵 Varsayılan ses: <b>{'açık' if audio else 'kapalı'}</b>\n"
+        f"🎵 Varsayılan ses: <b>{'açık' if audio else 'kapalı'}</b> · "
+        f"<b>{audio_label(bitrate)}</b>\n"
+        f"🎬 Video: <b>{video_codec_label(codec)}</b> · "
+        f"gönderim: <b>{download_mode_label(mode)}</b>\n"
         f"📝 Caption: <b>{'açık' if caption else 'kapalı'}</b>\n\n"
         "<b>Değiştirmek için</b>\n"
         "<code>/ayar kalite 1080</code> · sıfırlamak için <code>/ayar kalite 0</code>\n"
         "<code>/ayar ses aç</code> / <code>/ayar ses kapat</code>\n"
+        "<code>/ayar bitrate 320</code> (128 / 192 / 320)\n"
+        "<code>/ayar codec h264</code> / <code>/ayar codec auto</code>\n"
+        "<code>/ayar mod dosya</code> / <code>/ayar mod video</code>\n"
         "<code>/ayar caption aç</code> / <code>/ayar caption kapat</code>\n\n"
         "Varsayılan ses açıkken linkler MP3 olarak iner. Video istemek için "
-        "linkin sonuna <code>720p</code> gibi bir kalite yazın."
+        "linkin sonuna <code>720p</code> gibi bir kalite yazın. Bu ayarları "
+        "butonlarla da değiştirebilirsiniz."
+    )
+
+
+async def _preferences_keyboard(user: dict) -> InlineKeyboardMarkup:
+    bitrate = int(user.get("audio_bitrate") or 192)
+    codec = str(user.get("video_codec") or "auto")
+    mode = str(user.get("download_mode") or "video")
+    quality = int(user.get("default_quality") or 0)
+    caption = bool(user.get("show_caption", 1))
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=f"{'✓ ' if quality == 0 else ''}Otomatik",
+                    callback_data="qol|quality|0",
+                ),
+                InlineKeyboardButton(
+                    text=f"{'✓ ' if quality == 720 else ''}720p",
+                    callback_data="qol|quality|720",
+                ),
+                InlineKeyboardButton(
+                    text=f"{'✓ ' if quality == 1080 else ''}1080p",
+                    callback_data="qol|quality|1080",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=f"{'✓ ' if bitrate == 128 else ''}128k",
+                    callback_data="qol|bitrate|128",
+                ),
+                InlineKeyboardButton(
+                    text=f"{'✓ ' if bitrate == 192 else ''}192k",
+                    callback_data="qol|bitrate|192",
+                ),
+                InlineKeyboardButton(
+                    text=f"{'✓ ' if bitrate == 320 else ''}320k",
+                    callback_data="qol|bitrate|320",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=f"{'✓ ' if codec == 'h264' else ''}H.264",
+                    callback_data="qol|codec|h264",
+                ),
+                InlineKeyboardButton(
+                    text=f"{'✓ ' if codec == 'auto' else ''}Otomatik kodek",
+                    callback_data="qol|codec|auto",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=f"{'✓ ' if mode == 'document' else ''}Dosya",
+                    callback_data="qol|mode|document",
+                ),
+                InlineKeyboardButton(
+                    text=f"{'✓ ' if mode == 'video' else ''}Video",
+                    callback_data="qol|mode|video",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=f"{'✓ ' if caption else ''}Caption açık",
+                    callback_data="qol|caption|1",
+                ),
+                InlineKeyboardButton(
+                    text=f"{'✓ ' if not caption else ''}Caption kapalı",
+                    callback_data="qol|caption|0",
+                ),
+            ],
+        ]
     )
 
 
@@ -181,7 +270,11 @@ async def cmd_settings(message: Message, db: Database, db_user: dict) -> None:
     user = await db.get_user(message.from_user.id) or db_user
     parts = (message.text or "").split(maxsplit=2)
     if len(parts) < 3:
-        await message.answer(_settings_text(user), disable_web_page_preview=True)
+        await message.answer(
+            _settings_text(user),
+            reply_markup=await _preferences_keyboard(user),
+            disable_web_page_preview=True,
+        )
         return
 
     key = parts[1].lower()
@@ -224,10 +317,87 @@ async def cmd_settings(message: Message, db: Database, db_user: dict) -> None:
         await message.answer(f"✅ Caption: <b>{'açık' if enabled else 'kapalı'}</b>")
         return
 
+    if key in {"bitrate", "bit hızı", "bithizi"}:
+        try:
+            bitrate = int(value.removesuffix("k"))
+        except ValueError:
+            bitrate = 0
+        if bitrate not in {128, 192, 320}:
+            await message.answer(
+                "❌ Kullanım: <code>/ayar bitrate 320</code> (128 / 192 / 320)"
+            )
+            return
+        await db.update_user_settings(message.from_user.id, audio_bitrate=bitrate)
+        await message.answer(f"✅ MP3 kalitesi: <b>{bitrate} kbps</b>")
+        return
+
+    if key in {"codec", "kodek"}:
+        if value not in {"h264", "auto"}:
+            await message.answer(
+                "❌ Kullanım: <code>/ayar codec h264</code> veya "
+                "<code>/ayar codec auto</code>"
+            )
+            return
+        await db.update_user_settings(message.from_user.id, video_codec=value)
+        await message.answer(f"✅ Video kodeği: <b>{video_codec_label(value)}</b>")
+        return
+
+    if key in {"mod", "mode", "gönderim", "gonderim"}:
+        if value in {"dosya", "belge", "document", "file"}:
+            mode = "document"
+        elif value in {"video", "medya"}:
+            mode = "video"
+        else:
+            await message.answer(
+                "❌ Kullanım: <code>/ayar mod dosya</code> veya "
+                "<code>/ayar mod video</code>"
+            )
+            return
+        await db.update_user_settings(message.from_user.id, download_mode=mode)
+        await message.answer(
+            f"✅ Gönderim modu: <b>{download_mode_label(mode)}</b>"
+        )
+        return
+
     await message.answer(
         "❌ Bilinmeyen ayar. Kullanım: <code>/ayar kalite 1080</code>, "
-        "<code>/ayar ses aç</code>, <code>/ayar caption kapat</code>"
+        "<code>/ayar ses aç</code>, <code>/ayar caption kapat</code>, "
+        "<code>/ayar bitrate 320</code>, <code>/ayar codec h264</code>, "
+        "<code>/ayar mod dosya</code>"
     )
+
+
+@router.callback_query(F.data.startswith("qol|"))
+async def cb_preferences(
+    callback: CallbackQuery, db: Database, db_user: dict
+) -> None:
+    if callback.message is None:
+        await callback.answer()
+        return
+    parts = (callback.data or "").split("|", 2)
+    if len(parts) != 3:
+        await callback.answer()
+        return
+    _, key, value = parts
+    user_id = callback.from_user.id
+    if key == "quality":
+        await db.update_user_settings(user_id, default_quality=int(value))
+    elif key == "bitrate":
+        await db.update_user_settings(user_id, audio_bitrate=int(value))
+    elif key == "codec":
+        await db.update_user_settings(user_id, video_codec=value)
+    elif key == "mode":
+        await db.update_user_settings(user_id, download_mode=value)
+    elif key == "caption":
+        await db.update_user_settings(user_id, show_caption=value == "1")
+    user = await db.get_user(user_id) or db_user
+    await callback.answer("Ayar güncellendi ✅")
+    with contextlib.suppress(TelegramBadRequest):
+        await callback.message.edit_text(
+            _settings_text(user),
+            reply_markup=await _preferences_keyboard(user),
+            disable_web_page_preview=True,
+        )
 
 
 @router.message(Command("me", "profil", "limit"))

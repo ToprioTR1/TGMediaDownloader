@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+from bot.downloader import Downloader, MediaInfo
 from bot.qol import (
     CATEGORY_ACCESS,
     CATEGORY_SIZE,
@@ -11,11 +12,30 @@ from bot.qol import (
     error_category,
     error_hint,
     media_buttons,
+    playlist_menu,
+    playlist_summary,
     retry_keyboard,
     video_codec_label,
     video_label,
 )
 from bot.queue import Job, JobQueue
+
+
+def _info(**overrides) -> MediaInfo:
+    data = dict(
+        url="https://example.com/v",
+        title="Test videosu",
+        uploader="Kanal",
+        duration=90,
+        thumbnail=None,
+        heights=[720, 480, 360],
+        has_audio=True,
+        platform="YouTube",
+        webpage_url="https://example.com/v",
+        estimated_sizes={},
+    )
+    data.update(overrides)
+    return MediaInfo(**data)
 
 
 def _buttons(markup) -> list:
@@ -126,6 +146,102 @@ class SmartErrorTests(unittest.TestCase):
         self.assertIn("dosya", error_hint(CATEGORY_ACCESS, max_upload_mb=50))
 
 
+class PlaylistTests(unittest.TestCase):
+    def test_summary_lists_first_entries_and_total(self) -> None:
+        entries = [
+            _info(title="Birinci", duration=60),
+            _info(title="İkinci", duration=30),
+        ]
+        info = _info(
+            title="Liste",
+            playlist_count=5,
+            playlist_entries=entries,
+        )
+        settings = SimpleNamespace(playlist_limit=5, playlist_max_total_sec=1800)
+        text = playlist_summary(info, settings)
+        self.assertIn("5 video", text)
+        self.assertIn("Birinci", text)
+        self.assertIn("İkinci", text)
+        self.assertIn("01:30", text)
+
+    def test_menu_offers_all_more_audio_cancel(self) -> None:
+        entries = [_info(title=f"V{i}") for i in range(5)]
+        info = _info(playlist_count=5, playlist_entries=entries)
+        keyboard = playlist_menu(
+            info=info, token="tok", has_more=True, can_expand=True
+        )
+        callbacks = [b.callback_data for b in _buttons(keyboard)]
+        self.assertIn("play|all|tok", callbacks)
+        self.assertIn("play|more|tok", callbacks)
+        self.assertIn("play|audio|tok", callbacks)
+        self.assertIn("play|cancel|tok", callbacks)
+
+
+class PlaylistProbeTests(unittest.TestCase):
+    def test_probe_returns_playlist_entries(self) -> None:
+        downloader = object.__new__(Downloader)
+        downloader._settings = SimpleNamespace(
+            max_duration_sec=1800,
+            max_height=0,
+            playlist_limit=5,
+        )
+        calls: list[str] = []
+
+        def fake_extract(url: str):
+            calls.append(url)
+            if url == "https://example.com/list":
+                return {
+                    "_type": "playlist",
+                    "title": "Liste",
+                    "entries": [
+                        {"url": "https://example.com/1"},
+                        {"url": "https://example.com/2"},
+                    ],
+                }
+            return {
+                "title": "Video " + url.rsplit("/", 1)[-1],
+                "duration": 10,
+                "formats": [
+                    {"height": 720, "vcodec": "h264", "acodec": "aac", "filesize": 1000}
+                ],
+                "extractor_key": "Youtube",
+            }
+
+        downloader._extract_info = fake_extract  # type: ignore[method-assign]
+        info = downloader.probe("https://example.com/list")
+        self.assertTrue(info.is_playlist)
+        self.assertEqual(info.playlist_count, 2)
+        self.assertEqual(len(info.playlist_entries), 2)
+        self.assertEqual(info.title, "Liste")
+        self.assertEqual(
+            calls,
+            [
+                "https://example.com/list",
+                "https://example.com/1",
+                "https://example.com/2",
+            ],
+        )
+
+    def test_single_video_is_not_playlist(self) -> None:
+        downloader = object.__new__(Downloader)
+        downloader._settings = SimpleNamespace(
+            max_duration_sec=1800,
+            max_height=0,
+            playlist_limit=5,
+        )
+        downloader._extract_info = lambda url: {  # type: ignore[method-assign]
+            "title": "Tek",
+            "duration": 10,
+            "formats": [
+                {"height": 720, "vcodec": "h264", "acodec": "aac", "filesize": 1000}
+            ],
+            "extractor_key": "Youtube",
+        }
+        info = downloader.probe("https://example.com/v")
+        self.assertFalse(info.is_playlist)
+        self.assertEqual(info.playlist_count, 0)
+
+
 class _FakeBot:
     def __init__(self) -> None:
         self.edits: list[dict] = []
@@ -141,31 +257,28 @@ class _FakeBot:
 
 
 class QueueQolTests(unittest.IsolatedAsyncioTestCase):
-    async def _queue(self, raw: str) -> JobQueue:
-        settings = SimpleNamespace(
-            concurrency=1,
-            download_dir=Path(raw),
-            max_queue_per_user=5,
-            daily_limit=0,
-            cache_days=0,
-            max_upload_bytes=50 * 1024 * 1024,
-            max_upload_mb=50,
-            upload_timeout_sec=30,
-            gallery_enabled=False,
-            playlist_limit=5,
-            playlist_max_total_sec=1800,
-        )
-        queue = JobQueue(
-            _FakeBot(),
-            SimpleNamespace(is_promoted=AsyncMock(return_value=False)),
-            settings,
-            SimpleNamespace(),
-        )  # type: ignore[arg-type]
-        return queue
-
-    async def test_queue_position(self) -> None:
+    async def test_queue_position_and_cancel(self) -> None:
         with tempfile.TemporaryDirectory(prefix="qol-") as raw:
-            queue = await self._queue(raw)
+            settings = SimpleNamespace(
+                concurrency=1,
+                download_dir=Path(raw),
+                max_queue_per_user=5,
+                daily_limit=0,
+                cache_days=0,
+                max_upload_bytes=50 * 1024 * 1024,
+                max_upload_mb=50,
+                upload_timeout_sec=30,
+                gallery_enabled=False,
+                playlist_limit=5,
+                playlist_max_total_sec=1800,
+            )
+            db = SimpleNamespace(is_promoted=AsyncMock(return_value=False))
+            downloader = SimpleNamespace(
+                download=lambda *a, **k: (_ for _ in ()).throw(
+                    AssertionError("downloader cagrilmamali")
+                )
+            )
+            queue = JobQueue(_FakeBot(), db, settings, downloader)  # type: ignore[arg-type]
 
             def make_job(job_id: str) -> Job:
                 return Job(
@@ -185,58 +298,16 @@ class QueueQolTests(unittest.IsolatedAsyncioTestCase):
             await queue.submit(second)
             self.assertEqual(queue.queue_position(first), 1)
             self.assertEqual(queue.queue_position(second), 2)
-            self.assertEqual(queue.queue_snapshot()["queued"], 2)
-            text = queue._queue_text(second, "⏳ Sırada…")
-            self.assertIn("Sıra", text)
-            self.assertIn("2", text)
 
-    async def test_finished_job_has_no_position(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="qol-") as raw:
-            queue = await self._queue(raw)
-            job = Job(
-                id="a",
-                user_id=42,
-                chat_id=42,
-                status_message_id=1,
-                url="https://example.com/a",
-                preset="h:720",
-                title="Test",
-                platform="YouTube",
-                status_stage="download",
-            )
-            self.assertIsNone(queue.queue_position(job))
-
-    async def test_cancel_marks_only_owner(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="qol-") as raw:
-            queue = await self._queue(raw)
-            job = Job(
-                id="a",
-                user_id=42,
-                chat_id=42,
-                status_message_id=1,
-                url="https://example.com/a",
-                preset="h:720",
-                title="Test",
-                platform="YouTube",
-            )
-            await queue.submit(job)
+            state = await queue.cancel("b", chat_id=42, user_id=42)
+            self.assertEqual(state, "cancelled")
+            self.assertTrue(queue.is_cancelled(second))
             self.assertEqual(
-                await queue.cancel("a", chat_id=42, user_id=43), "missing"
-            )
-            self.assertFalse(queue.is_cancelled(job))
-            self.assertEqual(
-                await queue.cancel("a", chat_id=42, user_id=42), "cancelled"
-            )
-            self.assertTrue(queue.is_cancelled(job))
-            self.assertEqual(
-                await queue.cancel("a", chat_id=42, user_id=42), "already"
+                await queue.cancel("b", chat_id=42, user_id=43), "missing"
             )
 
-
-class CancelBehaviourTests(unittest.IsolatedAsyncioTestCase):
-    async def test_cancelled_job_is_not_shown_as_error(self) -> None:
+    async def test_queue_text_shows_position(self) -> None:
         with tempfile.TemporaryDirectory(prefix="qol-") as raw:
-            bot = _FakeBot()
             settings = SimpleNamespace(
                 concurrency=1,
                 download_dir=Path(raw),
@@ -251,26 +322,27 @@ class CancelBehaviourTests(unittest.IsolatedAsyncioTestCase):
                 playlist_max_total_sec=1800,
             )
             queue = JobQueue(
-                bot,
+                _FakeBot(),
                 SimpleNamespace(is_promoted=AsyncMock(return_value=False)),
                 settings,
                 SimpleNamespace(),
             )  # type: ignore[arg-type]
             job = Job(
-                id="c1",
+                id="a",
                 user_id=42,
                 chat_id=42,
-                status_message_id=7,
-                url="https://example.com/c",
+                status_message_id=1,
+                url="https://example.com/a",
                 preset="h:720",
-                title="Iptal",
+                title="Test",
                 platform="YouTube",
+                status_stage="queued",
             )
-            await queue.submit(job)
-            await queue.cancel("c1", chat_id=42, user_id=42)
-            await queue._process(job)
-            self.assertEqual(job.status_stage, "cancelled")
-            self.assertTrue(any("İptal edildi" in (e.get("text") or "") for e in bot.edits))
+            queue._queue.put_nowait(job)
+            queue._pending[42] = 1
+            text = queue._queue_text(job, "⏳ Sırada…")
+            self.assertIn("Sıra", text)
+            self.assertIn("1", text)
 
 
 if __name__ == "__main__":

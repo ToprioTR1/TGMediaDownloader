@@ -24,14 +24,16 @@ ile yazıldı, Docker ile çalışacak şekilde hazırlandı.
 - 📐 Telegram'da doğru en-boy oranı: her videoyla birlikte gerçek genişlik,
   yükseklik, süre ve küçük bir JPEG önizleme gönderilir; büyük videolar kare
   kutucuk olarak görünmez
-- ⚙️ `/ayar` ile kişisel varsayılanlar: kalite, ses tercihi, caption
+- ⚙️ `/ayar` ile kişisel varsayılanlar: kalite, ses tercihi, caption, MP3
+  bit hızı, H.264 uyumluluk modu ve video/dosya gönderimi
 - 🔘 Her videonun altında hızlı aksiyonlar: `🎵 Ses olarak al` ·
   `🎚 Kalite değiştir` · `📄 Dosya olarak gönder` · `🖼 Kapak fotoğrafı`;
   mümkün olduğunda yeniden indirmeden `file_id` önbelleğinden çalışır
 - 🧠 Akıllı hatalar: hataya göre yeniden dene, daha düşük kalite, dosya olarak
   gönder veya kaynağı aç butonu ve tek satırlık bir öneri
-- 🕒 Kuyruk sırası (`🕒 2/3`): bekleyen indirmenin sırasını gösterir
-- ❌ İş beklerken veya indirilirken `İptal` butonu
+- 🕒 Kuyruk sırası (`🕒 2/3`) ve iş beklerken/indirilirken `❌ İptal` butonu
+- 📚 Oynatma listesi desteği: liste bağlantısında önce kaç video indirileceği
+  sorulur (ilk birkaç / daha fazla / hepsi MP3), sonra tek tek işlenir
 - 📝 Medya açıklamasındaki (caption) ve yanıtlanan mesajdaki bağlantılar da işlenir
 - 🚦 Yalnızca yt-dlp site eşleştiricisinin tanıdığı URL'ler (veya sitelerin
   resmi kısa link alan adları) işlenir; normal web sayfaları ağ isteği
@@ -431,7 +433,7 @@ python -m unittest tests.test_instagram_embed -v    # Instagram embed ayrıştı
 python -m unittest tests.test_media -v              # ffprobe/önizleme testleri (ffmpeg gerekir)
 python -m unittest tests.test_retry -v              # tek otomatik tekrar testleri
 python -m unittest tests.test_database_migration -v # eski önbellek taşıma testleri
-python -m unittest tests.test_qol -v                # butonlar, akıllı hatalar, kuyruk ve iptal
+python -m unittest tests.test_qol -v                # butonlar, akıllı hatalar, kuyruk, listeler
 ```
 
 Duman testi kendi verisini `.tmp/` altında oluşturur ve Telegram'a gerçek istek
@@ -475,11 +477,14 @@ kullanır ve ağ isteği yapmaz.
   kez otomatik tekrar denenir. İkinci hata normal hata mesajını ve manuel
   `Yeniden dene` butonunu gösterir. Desteklenmeyen linkler yine sessizce yok
   sayılır ve tekrar denenmez.
-- Kuyruk sırası, işçi bekleyen işlerden hesaplanır; iş beklerken `🕒 2/3`
-  görünür, başlayınca ilerleme satırına döner.
-- `❌ İptal` butonu bekleyen işi hemen durdurur; çalışan yt-dlp indirmesi bir
-  sonraki ilerleme geri çağrısında durdurulur ve geçici klasörü silinir. İptal
-  edilen işler hata olarak kaydedilmez.
+- Kuyruk sırası, işçi bekleyen işlerden hesaplanır. `❌ İptal` butonu bekleyen
+  işi hemen durdurur; çalışan yt-dlp indirmesi bir sonraki ilerleme geri
+  çağrısında durdurulur ve geçici klasörü silinir. İptal edilen işler hata
+  olarak kaydedilmez.
+- Oynatma listeleri `PLAYLIST_LIMIT` (varsayılan 5, en fazla 20) ve
+  `PLAYLIST_MAX_TOTAL_SEC` (varsayılan 30 dakika, `0` = sınırsız) ile
+  sınırlanır. Listedeki videolar normal iş olarak kuyruğa girer; kullanıcı
+  kuyruğu ve günlük limit kuralları geçerli kalır.
 - Medya yüklemeleri `UPLOAD_TIMEOUT_SEC` kullanır (varsayılan 600 saniye).
   Telegram zamanında yanıt vermezse bot dosyayı otomatik olarak **tekrar
   göndermez**; çünkü dosya çoktan ulaşmış olabilir ve tekrar deneme kopya

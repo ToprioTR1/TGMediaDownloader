@@ -1457,7 +1457,7 @@ async def main() -> int:
         callbacks = [b.callback_data for b in error_buttons]
         check("retry|size1" in callbacks, "boyut hatasinda retry butonu yok")
         check(
-            "act|lower|size1" in callbacks,
+            f"act|lower|size1" in callbacks,
             f"boyut hatasinda dusuk kalite butonu yok: {callbacks}",
         )
         check(
@@ -1529,8 +1529,108 @@ async def main() -> int:
         await q4.cancel("qpos1", q4_chat, q4_chat)
         print("30) iptal butonu OK")
 
+        # 31) oynatma listesi karti
+        entries = [
+            MediaInfo(
+                url=f"https://example.com/pv/{i}",
+                title=f"Liste videosu {i}",
+                uploader="Kanal",
+                duration=60,
+                thumbnail=None,
+                heights=[720, 360],
+                has_audio=True,
+                platform="YouTube",
+                webpage_url=f"https://example.com/pv/{i}",
+                estimated_sizes={720: 10 * 1024 * 1024},
+            )
+            for i in range(1, 4)
+        ]
+        playlist = MediaInfo(
+            url=entries[0].url,
+            title="Test listesi",
+            uploader="Kanal",
+            duration=180,
+            thumbnail=None,
+            heights=[720, 360],
+            has_audio=True,
+            platform="YouTube",
+            webpage_url=entries[0].webpage_url,
+            playlist_count=3,
+            playlist_entries=entries,
+        )
+        mark = len(bot.calls)
+        await download._send_playlist_card(
+            chat_id=ADMIN.id,
+            user_id=ADMIN.id,
+            info=playlist,
+            settings=settings,
+            queue=queue,
+            requested=None,
+            audio=False,
+            as_document=False,
+        )
+        playlist_texts = [
+            c[1].get("text") or ""
+            for c in bot.calls[mark:]
+            if c[0] == "send_message"
+        ]
+        check(
+            any("Test listesi" in t and "3 video" in t for t in playlist_texts),
+            "oynatma listesi karti gonderilmedi",
+        )
+        playlist_callbacks = [
+            b.callback_data
+            for c in bot.calls[mark:]
+            if c[0] == "send_message" and c[1].get("reply_markup")
+            for row in c[1]["reply_markup"].inline_keyboard
+            for b in row
+        ]
+        check(
+            any((cb or "").startswith("play|all|") for cb in playlist_callbacks),
+            "oynatma listesi secim butonu yok",
+        )
+        check(
+            any((cb or "").startswith("play|audio|") for cb in playlist_callbacks),
+            "oynatma listesi MP3 butonu yok",
+        )
+        print("31) oynatma listesi karti OK")
+
+        # 32) ayar butonlari
+        await dp.feed_update(bot, msg_update("/ayar", 60))
+        prefs = [
+            c
+            for c in bot.calls
+            if c[0] == "send_message"
+            and "Kişisel ayarlar" in (c[1].get("text") or "")
+        ]
+        check(bool(prefs), "/ayar tercih ekrani gonderilmedi")
+        pref_callbacks = [
+            b.callback_data
+            for row in prefs[-1][1]["reply_markup"].inline_keyboard
+            for b in row
+        ]
+        check("qol|bitrate|320" in pref_callbacks, "bitrate tercihi yok")
+        check("qol|codec|h264" in pref_callbacks, "H.264 tercihi yok")
+        check("qol|mode|document" in pref_callbacks, "dosya modu tercihi yok")
+
+        pref_message = simple_message("ayarlar", 9700).as_(bot)
+        await dp.feed_update(
+            bot, callback_update("qol|bitrate|320", pref_message)
+        )
+        user = await db.get_user(ADMIN.id) or {}
+        check(int(user.get("audio_bitrate") or 0) == 320, "bitrate butonu kaydetmedi")
+        await dp.feed_update(
+            bot, callback_update("qol|mode|document", pref_message)
+        )
+        user = await db.get_user(ADMIN.id) or {}
+        check(user.get("download_mode") == "document", "mod butonu kaydetmedi")
+        await dp.feed_update(bot, callback_update("qol|mode|video", pref_message))
+        await dp.feed_update(bot, callback_update("qol|codec|auto", pref_message))
+        await dp.feed_update(bot, callback_update("qol|bitrate|192", pref_message))
+        print("32) ayar butonlari OK")
+
         stats = await db.stats()
-        print("31) istatistikler:", stats)
+        print("33) istatistikler:", stats)
     except AssertionError as exc:
         print("HATA:", exc)
         return 1

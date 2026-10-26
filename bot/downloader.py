@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -46,10 +46,17 @@ class MediaInfo:
     webpage_url: str
     # yukseklik -> tahmini dosya boyutu (bayt); bilinmiyorsa anahtar yok
     estimated_sizes: dict[int, int] = field(default_factory=dict)
+    # Oynatma listesi ise toplam video sayisi ve (varsa) siralanan ilk kayitlar.
+    playlist_count: int = 0
+    playlist_entries: list["MediaInfo"] = field(default_factory=list)
 
     @property
     def is_audio_only(self) -> bool:
         return not self.heights
+
+    @property
+    def is_playlist(self) -> bool:
+        return self.playlist_count > 1 and bool(self.playlist_entries)
 
 
 def _friendly_error(raw: str) -> str:
@@ -204,9 +211,26 @@ class Downloader:
         return ytdlp_supports_url(url)
 
     def probe(self, url: str) -> MediaInfo:
+        info = self._extract_info(url)
+        if info.get("_type") == "playlist" and info.get("entries") is not None:
+            entries = self._playlist_entries(url, info)
+            if entries:
+                first = replace(
+                    entries[0],
+                    title=(info.get("title") or entries[0].title).strip(),
+                    uploader=info.get("uploader")
+                    or info.get("channel")
+                    or entries[0].uploader,
+                    playlist_count=len(entries),
+                    playlist_entries=entries,
+                )
+                return first
+            raise DownloadError("Bu bağlantıda indirilebilir bir medya bulunamadı.")
+        return self._media_info(url, info, check_duration=True)
+
+    def _extract_info(self, url: str) -> dict[str, Any]:
         opts = self._base_opts()
         opts.update({"skip_download": True, "format": "bv*+ba/b"})
-
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=False)
@@ -215,10 +239,43 @@ class Downloader:
         except Exception as exc:  # noqa: BLE001 - yt-dlp genis hata yelpazesi
             log.exception("Bilgi cekme hatasi: %s", url)
             raise DownloadError(_friendly_error(str(exc))) from exc
-
         if not info:
             raise DownloadError("Bağlantıdan video bilgisi alınamadı.")
+        return info
 
+    def _playlist_entries(
+        self, url: str, info: dict[str, Any]
+    ) -> list[MediaInfo]:
+        """Oynatma listesinin ilk N videosunu ayri ayri inceler.
+
+        yt-dlp'nin `extract_flat` ciktisinda format listesi olmadigi icin her
+        kayit tek tek cozulur. Tek bir bozuk videonun tum listeyi
+        engellememesi icin hatalar atlanir.
+        """
+        limit = max(1, self._settings.playlist_limit)
+        entries: list[MediaInfo] = []
+        for item in list(info.get("entries") or [])[:limit]:
+            if not item:
+                continue
+            item_url = item.get("webpage_url") or item.get("url")
+            if not item_url:
+                continue
+            try:
+                detail = self._extract_info(str(item_url))
+            except DownloadError as exc:
+                log.warning("Oynatma listesi kaydi atlandi (%s): %s", item_url, exc)
+                continue
+            if detail.get("_type") == "playlist":
+                continue
+            try:
+                entries.append(self._media_info(str(item_url), detail))
+            except DownloadError as exc:
+                log.info("Oynatma listesi kaydi atlandi (%s): %s", item_url, exc)
+        return entries
+
+    def _media_info(
+        self, url: str, info: dict[str, Any], *, check_duration: bool = False
+    ) -> MediaInfo:
         # Kisa playlists / carousel gonderilerinde ilk ogeyi al
         if info.get("_type") == "playlist" and info.get("entries"):
             entries = [e for e in info["entries"] if e]
@@ -232,7 +289,8 @@ class Downloader:
         duration = info.get("duration")
         duration = int(duration) if duration else None
         if (
-            duration
+            check_duration
+            and duration
             and self._settings.max_duration_sec
             and duration > self._settings.max_duration_sec
         ):
@@ -319,12 +377,35 @@ class Downloader:
                 )
         return "bv*+ba/b"
 
+    @staticmethod
+    def _h264_selector(preset: str) -> str:
+        """H.264/AVC video + AAC ses; bulunamazsa normal secime dus."""
+        base = Downloader.format_selector(preset)
+        if preset.startswith("h:"):
+            height = int(re.sub(r"\D", "", preset) or 0)
+            if height:
+                return (
+                    f"bv*[height<={height}][vcodec^=avc1]+ba[acodec^=mp4a]/"
+                    f"b[height<={height}][vcodec^=avc1]/"
+                    f"bv*[height<={height}]+ba/"
+                    f"b[height<={height}]/"
+                    f"bv*+ba/b"
+                )
+        return (
+            "bv*[vcodec^=avc1]+ba[acodec^=mp4a]/"
+            "b[vcodec^=avc1]/"
+            f"{base}"
+        )
+
     def download(
         self,
         url: str,
         preset: str,
         outdir: Path,
         state: dict[str, Any] | None = None,
+        *,
+        audio_bitrate: int = 192,
+        video_codec: str = "auto",
     ) -> Path:
         state = state if state is not None else {}
         outdir.mkdir(parents=True, exist_ok=True)
@@ -357,15 +438,20 @@ class Downloader:
         )
 
         if preset == "audio":
+            bitrate = audio_bitrate if audio_bitrate in {128, 192, 320} else 192
             opts["postprocessors"] = [
                 {
                     "key": "FFmpegExtractAudio",
                     "preferredcodec": "mp3",
-                    "preferredquality": "192",
+                    "preferredquality": str(bitrate),
                 }
             ]
         else:
             opts["merge_output_format"] = "mp4"
+            if video_codec == "h264":
+                # Telegram bazi eski istemcilerde VP9/AV1'i oynatamiyor; uyumlu
+                # modda H.264 tercih edilir, yoksa mevcut format kullanilir.
+                opts["format"] = self._h264_selector(preset)
 
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:

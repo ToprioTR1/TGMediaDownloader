@@ -1,4 +1,4 @@
-"""Kullanici deneyimi yardimcilari: etiketler ve hizli aksiyon klavyeleri.
+"""Kullanici deneyimi yardimcilari: etiketler, hata ipuclari, tercih klavyesi.
 
 Bu modul Telegram'dan bagimsizdir; yalnizca klavye/mesaj uretir. Is akisini
 degistiren kararlar cagiran katmanda (handler/kuyruk) verilir.
@@ -8,12 +8,17 @@ from __future__ import annotations
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from .utils import preset_height, quality_label
+from .config import Settings
+from .downloader import MediaInfo
+from .utils import escape, human_duration, human_size, preset_height, quality_label
 
 # Buton metinlari; smoke testleri ve ice aktarmalar bunlari kullanir.
+TEXT_UP = "⬆️ Daha yüksek kalite"
+TEXT_DOWN = "⬇️ Daha düşük kalite"
 TEXT_DOCUMENT = "📄 Dosya olarak gönder"
 TEXT_THUMBNAIL = "🖼 Kapak fotoğrafı"
 TEXT_CANCEL = "❌ İptal"
+TEXT_GROUP = "📚 Oynatma listesi"
 TEXT_RETRY = "🔁 Yeniden dene"
 TEXT_LOWER = "⬇️ Daha düşük kalite dene"
 TEXT_SOURCE = "🔗 Kaynağı aç"
@@ -135,7 +140,16 @@ def retry_keyboard(
         [InlineKeyboardButton(text=TEXT_RETRY, callback_data=f"retry|{item_id}")]
     ]
     if preset and preset.startswith("h:") and has_lower:
-        if category in {CATEGORY_SIZE, CATEGORY_TRANSIENT}:
+        if category == CATEGORY_SIZE:
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=TEXT_LOWER,
+                        callback_data=f"act|lower|{item_id}",
+                    )
+                ]
+            )
+        elif category == CATEGORY_TRANSIENT:
             rows.append(
                 [
                     InlineKeyboardButton(
@@ -162,7 +176,9 @@ def retry_keyboard(
         CATEGORY_UNSUPPORTED,
         CATEGORY_GENERIC,
     }:
-        rows.append([InlineKeyboardButton(text=TEXT_SOURCE, url=source_url)])
+        rows.append(
+            [InlineKeyboardButton(text=TEXT_SOURCE, url=source_url)]
+        )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -298,6 +314,115 @@ def quality_menu(current_preset: str, heights: list[int] | None = None) -> Inlin
         ]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def playlist_menu(
+    *,
+    info: MediaInfo,
+    token: str,
+    has_more: bool,
+    can_expand: bool,
+    level: int = 0,
+) -> InlineKeyboardMarkup:
+    """Oynatma listesi secim klavyesi.
+
+    `can_expand`: sunucudaki PLAYLIST_LIMIT ilk turdan daha fazlasina izin
+    veriyor mu? `level`: kullanicinin secmis oldugu tur (0 = varsayilan,
+    1 = daha fazla video).
+    """
+    rows: list[list[InlineKeyboardButton]] = [
+        [
+            InlineKeyboardButton(
+                text=f"🎬 İlk {len(info.playlist_entries)}",
+                callback_data=f"play|all|{token}",
+            )
+        ]
+    ]
+    if has_more and can_expand:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="➕ Daha fazla video",
+                    callback_data=f"play|more|{token}",
+                )
+            ]
+        )
+    elif level > 0:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="➖ Daha az video",
+                    callback_data=f"play|less|{token}",
+                )
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="🎵 Hepsini MP3",
+                callback_data=f"play|audio|{token}",
+            )
+        ]
+    )
+    rows.append(
+        [InlineKeyboardButton(text="✖️ İptal", callback_data=f"play|cancel|{token}")]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def playlist_summary(
+    info: MediaInfo, settings: Settings, *, selected: int | None = None
+) -> str:
+    """Oynatma listesi tanitim metni (HTML)."""
+    total = info.playlist_count
+    count = selected or len(info.playlist_entries)
+    lines = [
+        f"📚 <b>{escape(info.title[:150])}</b>",
+        f"{info.platform} • {total} video",
+    ]
+    if info.uploader:
+        lines.append(escape(info.uploader[:60]))
+    lines.append("")
+    shown = info.playlist_entries[:count]
+    if shown:
+        lines.append(f"<b>İlk {len(shown)} video:</b>")
+        for index, entry in enumerate(shown, start=1):
+            duration = human_duration(entry.duration) if entry.duration else "—"
+            lines.append(
+                f"{index}. {escape(entry.title[:80])} · {duration}"
+            )
+        lines.append("")
+    total_seconds = sum(entry.duration or 0 for entry in shown)
+    if total_seconds:
+        lines.append(f"⏱ Toplam: {human_duration(total_seconds)}")
+    if settings.playlist_limit and total > settings.playlist_limit:
+        lines.append(
+            f"ℹ️ Listelerde en fazla {settings.playlist_limit} video işlenir."
+        )
+    if settings.playlist_max_total_sec and total_seconds:
+        if total_seconds > settings.playlist_max_total_sec:
+            lines.append(
+                "⚠️ Seçili videoların toplam süresi liste sınırını aşıyor; "
+                "yine de tek tek indirilecek."
+            )
+    if total > count:
+        lines.append(f"➕ {total - count} video daha var.")
+    return "\n".join(lines)
+
+
+def playlist_entry_status(index: int, total: int, title: str) -> str:
+    return (
+        f"📚 <b>Oynatma listesi {index}/{total}</b>\n"
+        f"{escape(title[:150])}"
+    )
+
+
+def size_hint_for_estimate(size: int | None, max_upload_mb: int) -> str | None:
+    if not size:
+        return None
+    if size > max_upload_mb * 1024 * 1024:
+        return f"~{human_size(size)} · limit {max_upload_mb} MB"
+    return None
 
 
 def lower_preset(preset: str, heights: list[int]) -> str | None:

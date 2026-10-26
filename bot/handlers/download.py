@@ -1,4 +1,4 @@
-"""Baglanti alma, akilli kalite/boyut secimi, galeri ve kuyruk.
+"""Baglanti alma, akilli kalite/boyut secimi, galeri, oynatma listesi ve kuyruk.
 
 Kural:
 - Mesajda "1080p" gibi bir ifade varsa o cozunurluge EN YAKIN kalite indirilir.
@@ -8,6 +8,8 @@ Kural:
 - "mp3" / "ses" yazilirsa sadece ses indirilir.
 - Instagram fotoğraf/carousel ve TikTok fotoğraf gönderileri gallery-dl ile
   indirilir.
+- Oynatma listelerinde once secim karti gosterilir; kullanici ilk N videoyu,
+  daha fazlasini veya hepsini MP3 olarak secebilir.
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ import contextlib
 import logging
 import time
 import uuid
+from dataclasses import dataclass, field
 from typing import Awaitable, Callable
 from urllib.parse import urlparse
 
@@ -24,7 +27,6 @@ from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from aiogram.types import (
     CallbackQuery,
-    InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
 )
@@ -34,11 +36,14 @@ from ..database import Database
 from ..downloader import DownloadError, Downloader, MediaInfo
 from ..gallery import GalleryDownloader
 from ..qol import (
-    error_category,
-    error_hint,
+    audio_label,
     media_buttons,
+    playlist_entry_status,
+    playlist_menu,
+    playlist_summary,
     quality_menu,
     retry_keyboard,
+    size_hint_for_estimate,
     video_label,
 )
 from ..queue import Job, JobQueue, QueueFullError, cached_video_kwargs
@@ -61,13 +66,31 @@ router = Router(name="download")
 
 _last_request: dict[int, float] = {}
 _probe_retries: dict[str, tuple[int, int, int, str, str]] = {}
+_probe_infos: dict[str, MediaInfo] = {}
+_playlists: dict[str, _PlaylistChoice] = {}
+_quality_states: dict[str, list[int]] = {}
 PROBE_TIMEOUT = 90
 GALLERY_HOSTS = ("instagram.com", "instagr.am")
 TIKTOK_SHORT_HOSTS = {"vm.tiktok.com", "vt.tiktok.com"}
 
+PLAYLIST_FIRST = 3
+
 
 class SizeLimitError(Exception):
     """Secilen kalite Telegram limitine sigmiyor."""
+
+
+@dataclass(slots=True)
+class _PlaylistChoice:
+    """Oynatma listesi kartindaki kullanicinin secim baglami."""
+
+    entries: list[MediaInfo]
+    info: MediaInfo
+    user_id: int
+    requested: int | None
+    audio: bool
+    as_document: bool
+    user: dict = field(default_factory=dict)
 
 
 def _url_host(url: str) -> str:
@@ -182,6 +205,10 @@ def _resolve_preset(
     return f"h:{chosen}", target, chosen, chosen != ordered[0]
 
 
+def _as_document(user: dict) -> bool:
+    return str(user.get("download_mode") or "video") == "document"
+
+
 def _info_text(
     info: MediaInfo,
     requested: int | None,
@@ -191,6 +218,10 @@ def _info_text(
     downgraded: bool,
     settings: Settings,
     as_document: bool = False,
+    *,
+    user: dict | None = None,
+    index: int | None = None,
+    total: int | None = None,
 ) -> str:
     meta = [info.platform]
     if info.uploader:
@@ -198,15 +229,24 @@ def _info_text(
     if info.duration:
         meta.append(human_duration(info.duration))
 
-    lines = [f"🎬 <b>{escape(info.title[:200])}</b>", " • ".join(meta)]
+    heading = f"🎬 <b>{escape(info.title[:200])}</b>"
+    if index and total:
+        heading = f"📚 <b>{index}/{total}</b> · {heading}"
+    lines = [heading, " • ".join(meta)]
     if info.heights:
         lines.append("📐 Mevcut: " + ", ".join(f"{h}p" for h in info.heights[:6]))
+    else:
+        lines.append("📐 Tek video akışı (kalite seçimi yok)")
     if info.estimated_sizes and chosen and info.estimated_sizes.get(chosen):
-        lines.append(f"📦 Tahmini: ~{human_size(info.estimated_sizes[chosen])}")
+        estimate = human_size(info.estimated_sizes[chosen])
+        hint = size_hint_for_estimate(
+            info.estimated_sizes.get(chosen), settings.max_upload_mb
+        )
+        lines.append(f"📦 Tahmini: ~{estimate}" + (f" · ⚠️ {hint}" if hint else ""))
     lines.append("")
 
     if preset == "audio":
-        lines.append("🎵 Ses (MP3) indirilecek…")
+        lines.append(f"🎵 Ses ({audio_label((user or {}).get('audio_bitrate'))}) indirilecek…")
     elif chosen is None:
         lines.append("🎬 En iyi kalitede indirilecek…")
     elif downgraded:
@@ -329,20 +369,270 @@ def _remember_probe_failure(
     url: str,
     *,
     info: MediaInfo | None = None,
-    category: str | None = None,
 ) -> InlineKeyboardMarkup:
     token = uuid.uuid4().hex[:10]
     _probe_retries[token] = (chat_id, user_id, message_id, text, url)
+    if info is not None:
+        _probe_infos[token] = info
+        while len(_probe_infos) > 400:
+            _probe_infos.pop(next(iter(_probe_infos)))
     while len(_probe_retries) > 200:
-        _probe_retries.pop(next(iter(_probe_retries)))
+        old = next(iter(_probe_retries))
+        _probe_retries.pop(old)
+        _probe_infos.pop(old, None)
     return retry_keyboard(
         token,
-        preset=f"h:{info.heights[0]}" if info and info.heights else None,
+        preset=info and _preset_for(info),
         has_lower=bool(info and len(info.heights) > 1),
         source_url=url,
         max_upload_mb=0,
-        category=category or "generic",
     )
+
+
+def _preset_for(info: MediaInfo) -> str:
+    if info.heights:
+        return f"h:{info.heights[0]}"
+    return "best"
+
+
+async def _resolve_and_queue(
+    *,
+    bot: Bot,
+    chat_id: int,
+    user_id: int,
+    url: str,
+    info: MediaInfo,
+    text: str,
+    status: Message,
+    user: dict,
+    settings: Settings,
+    queue: JobQueue,
+    requested: int | None,
+    audio: bool,
+    as_document: bool,
+    index: int | None = None,
+    total: int | None = None,
+) -> bool:
+    """Tek bir video icin preset secip kuyruga ekler. Basariliysa True."""
+    try:
+        preset, target, chosen, downgraded = _resolve_preset(
+            info, requested, audio, settings
+        )
+    except SizeLimitError as exc:
+        await queue.edit_status(
+            chat_id,
+            status.message_id,
+            f"❌ {escape(str(exc))}",
+            keyboard=_remember_probe_failure(
+                chat_id,
+                user_id,
+                status.message_id,
+                text,
+                url,
+                info=info,
+            ),
+            wait=True,
+        )
+        await queue.forget_status(chat_id, status.message_id)
+        return False
+
+    status_header = _info_text(
+        info,
+        requested,
+        target,
+        chosen,
+        preset,
+        downgraded,
+        settings,
+        as_document,
+        user=user,
+        index=index,
+        total=total,
+    )
+    job = Job(
+        id=uuid.uuid4().hex[:10],
+        user_id=user_id,
+        chat_id=chat_id,
+        status_message_id=status.message_id,
+        url=info.webpage_url,
+        preset=preset,
+        title=info.title,
+        platform=info.platform,
+        duration=info.duration,
+        source_url=info.webpage_url,
+        show_caption=bool(user.get("show_caption", 1)),
+        as_document=as_document,
+        status_header=status_header,
+        audio_bitrate=int(user.get("audio_bitrate") or 192),
+        video_codec=str(user.get("video_codec") or "auto"),
+        heights=list(info.heights),
+        playlist_index=index or 0,
+        playlist_total=total or 0,
+    )
+    _quality_states[job.url] = list(info.heights)
+    while len(_quality_states) > 500:
+        _quality_states.pop(next(iter(_quality_states)))
+    try:
+        queued = await queue.submit(job)
+    except QueueFullError as exc:
+        await queue.edit_status(
+            chat_id,
+            status.message_id,
+            f"❌ {escape(str(exc))}",
+            wait=True,
+        )
+        await queue.forget_status(chat_id, status.message_id)
+        return False
+    except Exception:  # noqa: BLE001 - DB/kuyruk hatasi mesaji asili birakmasin
+        log.exception("Indirme isi kuyruga alinamadi: %s", url)
+        await queue.edit_status(
+            chat_id,
+            status.message_id,
+            "❌ İşlem sıraya alınamadı. Lütfen tekrar deneyin.",
+            wait=True,
+        )
+        await queue.forget_status(chat_id, status.message_id)
+        return False
+    if not queued:
+        await queue.delete_status(chat_id, status.message_id)
+    return queued
+
+
+async def _send_playlist_card(
+    *,
+    chat_id: int,
+    user_id: int,
+    info: MediaInfo,
+    settings: Settings,
+    queue: JobQueue,
+    requested: int | None,
+    audio: bool,
+    as_document: bool,
+) -> None:
+    """Oynatma listesi icin 'kac video?' kartini gonderir."""
+    level = min(PLAYLIST_FIRST, len(info.playlist_entries))
+    trimmed = _playlist_view(info, level)
+    token = uuid.uuid4().hex[:10]
+    _playlists[token] = _PlaylistChoice(
+        entries=list(info.playlist_entries),
+        info=info,
+        user_id=user_id,
+        requested=requested,
+        audio=audio,
+        as_document=as_document,
+    )
+    while len(_playlists) > 100:
+        old = next(iter(_playlists))
+        _playlists.pop(old, None)
+    text_body = playlist_summary(trimmed, settings, selected=level)
+    if requested:
+        text_body += f"\n\n🎯 Kalite: <b>{requested}p</b>"
+    if audio:
+        text_body += "\n🎵 MP3 olarak indirilecek."
+    if as_document:
+        text_body += "\n📄 Dosya olarak gönderilecek."
+    status = await queue.send_status(
+        chat_id,
+        text_body,
+        keyboard=playlist_menu(
+            info=trimmed,
+            token=token,
+            has_more=len(info.playlist_entries) > level,
+            can_expand=settings.playlist_limit > level,
+        ),
+    )
+    await queue.forget_status(chat_id, status.message_id)
+
+
+def _playlist_view(info: MediaInfo, level: int) -> MediaInfo:
+    entries = info.playlist_entries[:level]
+    first = entries[0] if entries else info
+    return MediaInfo(
+        url=first.url,
+        title=info.title,
+        uploader=info.uploader,
+        duration=sum(e.duration or 0 for e in entries) or None,
+        thumbnail=first.thumbnail,
+        heights=first.heights,
+        has_audio=first.has_audio,
+        platform=first.platform,
+        webpage_url=first.webpage_url,
+        estimated_sizes=first.estimated_sizes,
+        playlist_count=len(entries),
+        playlist_entries=entries,
+    )
+
+
+async def _start_playlist(
+    *,
+    bot: Bot,
+    chat_id: int,
+    user_id: int,
+    entries: list[MediaInfo],
+    choice: "_PlaylistChoice",
+    settings: Settings,
+    db: Database,
+    queue: JobQueue,
+) -> None:
+    """Secilen oynatma listesi videolarini sirayla kuyruga alir."""
+    user = await db.get_user(user_id) or {}
+    limit = settings.playlist_limit
+    selected = entries[:limit]
+    if settings.playlist_max_total_sec:
+        kept: list[MediaInfo] = []
+        total_sec = 0
+        for entry in selected:
+            if entry.duration and total_sec + entry.duration > settings.playlist_max_total_sec:
+                continue
+            kept.append(entry)
+            total_sec += entry.duration or 0
+        selected = kept or selected[:1]
+    if not selected:
+        await bot.send_message(chat_id, "❌ Oynatma listesinde işlenecek video yok.")
+        return
+    summary = MediaInfo(
+        url=selected[0].url,
+        title=choice.info.title,
+        uploader=None,
+        duration=sum(e.duration or 0 for e in selected) or None,
+        thumbnail=None,
+        heights=[],
+        has_audio=False,
+        platform=selected[0].platform,
+        webpage_url=selected[0].webpage_url,
+        playlist_count=len(selected),
+        playlist_entries=selected,
+    )
+    header = playlist_summary(summary, settings, selected=len(selected))
+    if len(selected) < len(entries):
+        header += f"\n\nℹ️ Seçilen {len(entries)} videodan {len(selected)} tanesi işlenecek."
+    status = await queue.send_status(chat_id, header + "\n\n⏳ Sıraya alınıyor…")
+    for index, entry in enumerate(selected, start=1):
+        await queue.edit_status(
+            chat_id,
+            status.message_id,
+            playlist_entry_status(index, len(selected), entry.title),
+            wait=True,
+        )
+        await _resolve_and_queue(
+            bot=bot,
+            chat_id=chat_id,
+            user_id=user_id,
+            url=entry.webpage_url,
+            info=entry,
+            text="",
+            status=status,
+            user=choice.user or user,
+            settings=settings,
+            queue=queue,
+            requested=choice.requested,
+            audio=choice.audio,
+            as_document=choice.as_document,
+            index=index,
+            total=len(selected),
+        )
+    await queue.delete_status(chat_id, status.message_id)
+    await queue.forget_status(chat_id, status.message_id)
 
 
 @router.message(F.text | F.caption)
@@ -414,6 +704,7 @@ async def _process_text(
     queue: JobQueue,
     only_url: str | None = None,
     existing_status: Message | None = None,
+    keep_playlist_card: bool = False,
 ) -> None:
     urls = [only_url] if only_url else extract_urls(text)
     supported_urls = [url for url in urls if _supports_url(downloader, gallery, url)]
@@ -442,7 +733,7 @@ async def _process_text(
     user = await db.get_user(user_id) or {}
     requested, audio = _request_options(text, user)
     show_caption = bool(user.get("show_caption", 1))
-    as_document = wants_document(text)
+    as_document = wants_document(text) or _as_document(user)
 
     reuse_status = existing_status
     for url in supported_urls:
@@ -526,19 +817,12 @@ async def _process_text(
                     # desteklenmeyen linklerde oldugu gibi sessizce bitir.
                     await queue.delete_status(chat_id, status.message_id)
                     continue
-                category = error_category(str(exc))
                 await queue.edit_status(
                     chat_id,
                     status.message_id,
-                    f"❌ {escape(str(exc))}\n\n"
-                    f"{error_hint(category, max_upload_mb=settings.max_upload_mb)}",
+                    f"❌ {escape(str(exc))}",
                     keyboard=_remember_probe_failure(
-                        chat_id,
-                        user_id,
-                        status.message_id,
-                        text,
-                        url,
-                        category=category,
+                        chat_id, user_id, status.message_id, text, url
                     ),
                     wait=True,
                 )
@@ -601,6 +885,9 @@ async def _process_text(
                     chat_id,
                     status.message_id,
                     f"❌ {escape(str(exc))}",
+                    keyboard=_remember_probe_failure(
+                        chat_id, user_id, status.message_id, text, url
+                    ),
                     wait=True,
                 )
                 await queue.forget_status(chat_id, status.message_id)
@@ -622,157 +909,46 @@ async def _process_text(
 
         assert info is not None  # bu noktada her zaman dolu (yukarida kontrol edildi)
 
-        try:
-            preset, target, chosen, downgraded = _resolve_preset(
-                info, requested, audio, settings
+        # ------------------------------------------------- oynatma listesi
+        if info.is_playlist:
+            await queue.delete_status(chat_id, status.message_id)
+            await _send_playlist_card(
+                chat_id=chat_id,
+                user_id=user_id,
+                info=info,
+                settings=settings,
+                queue=queue,
+                requested=requested,
+                audio=audio,
+                as_document=as_document,
             )
-        except SizeLimitError as exc:
-            await queue.edit_status(
-                chat_id,
-                status.message_id,
-                f"❌ {escape(str(exc))}\n\n"
-                f"{error_hint('size', max_upload_mb=settings.max_upload_mb)}",
-                keyboard=_remember_probe_failure(
-                    chat_id,
-                    user_id,
-                    status.message_id,
-                    text,
-                    url,
-                    info=info,
-                    category="size",
-                ),
-                wait=True,
-            )
-            await queue.forget_status(chat_id, status.message_id)
             continue
 
-        status_header = _info_text(
-            info,
-            requested,
-            target,
-            chosen,
-            preset,
-            downgraded,
-            settings,
-            as_document,
-        )
-        job = Job(
-            id=uuid.uuid4().hex[:10],
-            user_id=user_id,
+        await _resolve_and_queue(
+            bot=bot,
             chat_id=chat_id,
-            status_message_id=status.message_id,
-            url=info.webpage_url,
-            preset=preset,
-            title=info.title,
-            platform=info.platform,
-            duration=info.duration,
-            source_url=info.webpage_url,
-            show_caption=show_caption,
+            user_id=user_id,
+            url=url,
+            info=info,
+            text=text,
+            status=status,
+            user=user,
+            settings=settings,
+            queue=queue,
+            requested=requested,
+            audio=audio,
             as_document=as_document,
-            status_header=status_header,
         )
-        try:
-            queued = await queue.submit(job)
-        except QueueFullError as exc:
-            await queue.edit_status(
-                chat_id,
-                status.message_id,
-                f"❌ {escape(str(exc))}",
-                wait=True,
-            )
-            await queue.forget_status(chat_id, status.message_id)
-            continue
-        except Exception:  # noqa: BLE001 - DB/kuyruk hatasi mesaji asili birakmasin
-            log.exception("Indirme isi kuyruga alinamadi: %s", url)
-            await queue.edit_status(
-                chat_id,
-                status.message_id,
-                "❌ İşlem sıraya alınamadı. Lütfen tekrar deneyin.",
-                wait=True,
-            )
-            await queue.forget_status(chat_id, status.message_id)
-            continue
-        if not queued:
-            # Ayni is zaten suruyor: fazladan durum mesaji birakma.
-            await queue.delete_status(chat_id, status.message_id)
 
         log.info(
-            "Kuyruga eklendi: kullanici=%s platform=%s hedef=%s secilen=%s preset=%s",
+            "Kuyruga eklendi: kullanici=%s platform=%s preset=%s",
             user_id,
             info.platform,
-            target,
-            chosen,
-            preset,
+            _preset_for(info),
         )
 
 
 # --------------------------------------------------------------- buton aksiyonlari
-
-
-@router.callback_query(F.data.startswith("retrytext|"))
-async def on_retry_text(
-    callback: CallbackQuery,
-    settings: Settings,
-    db: Database,
-    downloader: Downloader,
-    gallery: GalleryDownloader,
-    queue: JobQueue,
-) -> None:
-    if callback.message is None:
-        await callback.answer()
-        return
-
-    token = (callback.data or "").split("|", 1)[1]
-    await _retry_probe(callback, token, settings, db, downloader, gallery, queue)
-
-
-async def _retry_probe(
-    callback: CallbackQuery,
-    token: str,
-    settings: Settings,
-    db: Database,
-    downloader: Downloader,
-    gallery: GalleryDownloader,
-    queue: JobQueue,
-) -> None:
-    """Kesif (probe) hata kartindaki yeniden denemeyi isler."""
-    if callback.message is None:
-        await callback.answer()
-        return
-    item = _probe_retries.get(token)
-    if item is None:
-        await callback.answer(
-            "Bu deneme artık geçersiz. Linki tekrar gönderin.", show_alert=True
-        )
-        return
-
-    chat_id, user_id, message_id, text, url = item
-    if (
-        callback.message.chat.id != chat_id
-        or callback.from_user.id != user_id
-        or callback.message.message_id != message_id
-    ):
-        await callback.answer(
-            "Bu buton başka bir isteğe ait. Linki kendiniz gönderin.",
-            show_alert=True,
-        )
-        return
-    _probe_retries.pop(token, None)
-
-    await callback.answer("Yeniden denendi 🔁")
-    await _process_text(
-        callback.bot,
-        chat_id,
-        user_id,
-        text,
-        settings=settings,
-        db=db,
-        downloader=downloader,
-        gallery=gallery,
-        queue=queue,
-        only_url=url,
-        existing_status=callback.message,
-    )
 
 
 @router.callback_query(F.data.startswith("retry|"))
@@ -805,6 +981,54 @@ async def on_retry(
         return
 
     await callback.answer("Yeniden denendi 🔁")
+
+
+async def _retry_probe(
+    callback: CallbackQuery,
+    token: str,
+    settings: Settings,
+    db: Database,
+    downloader: Downloader,
+    gallery: GalleryDownloader,
+    queue: JobQueue,
+) -> None:
+    """Kesif (probe) hata kartindaki yeniden denemeyi isler."""
+    if callback.message is None:
+        await callback.answer()
+        return
+    item = _probe_retries.get(token)
+    if item is None:
+        await callback.answer(
+            "Bu deneme artık geçersiz. Linki tekrar gönderin.", show_alert=True
+        )
+        return
+    chat_id, user_id, message_id, text, url = item
+    if (
+        callback.message.chat.id != chat_id
+        or callback.from_user.id != user_id
+        or callback.message.message_id != message_id
+    ):
+        await callback.answer(
+            "Bu buton başka bir isteğe ait. Linki kendiniz gönderin.",
+            show_alert=True,
+        )
+        return
+    _probe_retries.pop(token, None)
+    _probe_infos.pop(token, None)
+    await callback.answer("Yeniden denendi 🔁")
+    await _process_text(
+        callback.bot,
+        chat_id,
+        user_id,
+        text,
+        settings=settings,
+        db=db,
+        downloader=downloader,
+        gallery=gallery,
+        queue=queue,
+        only_url=url,
+        existing_status=callback.message,
+    )
 
 
 async def _resend_cached(bot: Bot, chat_id: int, row: dict, timeout: int) -> None:
@@ -910,7 +1134,9 @@ async def _queue_with_status(
         return
     chat_id = callback.message.chat.id
     user = await db.get_user(callback.from_user.id) or {}
-    job = _quality_job_for(row, callback.from_user.id, preset, heights=heights)
+    job = _quality_job_for(
+        row, callback.from_user.id, preset, heights=heights
+    )
     job.chat_id = chat_id
     job.show_caption = bool(user.get("show_caption", 1))
     if as_document_override is not None:
@@ -921,6 +1147,10 @@ async def _queue_with_status(
         job.as_document = str(user.get("download_mode") or "video") == "document"
     job.audio_bitrate = int(user.get("audio_bitrate") or 192)
     job.video_codec = str(user.get("video_codec") or "auto")
+    # Kalite menusu icin mevcut kaliteleri buton durumundan tasi.
+    _quality_states[job.url] = list(heights or [])
+    while len(_quality_states) > 500:
+        _quality_states.pop(next(iter(_quality_states)))
     status = await queue.send_status(chat_id, "⬇️ <b>Hazırlanıyor…</b>")
     job.status_message_id = status.message_id
     try:
@@ -938,17 +1168,6 @@ async def _queue_with_status(
     if origin_message is not None:
         with contextlib.suppress(TelegramBadRequest):
             await origin_message.edit_reply_markup(reply_markup=None)
-
-
-def _quality_heights(row: dict) -> list[int]:
-    """Onbellek satirindaki preset'ten yola cikip kalite listesi uretir."""
-    current = preset_height(row.get("preset") or "")
-    if current is None:
-        return []
-    base = [144, 240, 360, 480, 720, 1080, 1440, 2160]
-    heights = {h for h in base if h <= current}
-    heights.add(current)
-    return sorted(heights, reverse=True)
 
 
 @router.callback_query(F.data.startswith("act|"))
@@ -1041,9 +1260,10 @@ async def on_action(
 
     if action == "qmenu":
         await callback.answer()
+        heights = _quality_heights(row)
         with contextlib.suppress(TelegramBadRequest):
             await callback.message.edit_reply_markup(
-                reply_markup=quality_menu(row.get("preset") or "", _quality_heights(row))
+                reply_markup=quality_menu(row.get("preset") or "", heights)
             )
         return
 
@@ -1064,6 +1284,7 @@ async def on_action(
         return
 
     if action == "quality":
+        heights = _quality_heights(row)
         preset = "audio" if key == "mp3" else f"h:{key}"
         await _queue_with_status(
             callback,
@@ -1072,7 +1293,7 @@ async def on_action(
             queue=queue,
             preset=preset,
             row=row,
-            heights=_quality_heights(row),
+            heights=heights,
             origin_message=callback.message,
         )
         return
@@ -1127,3 +1348,97 @@ async def on_action(
         return
 
     await callback.answer()
+
+
+def _quality_heights(row: dict) -> list[int]:
+    """Medyanin bilinen kaliteleri; yoksa onbellek preset'inden turetir."""
+    known = _quality_states.get(row.get("url") or "")
+    if known:
+        return sorted(set(known), reverse=True)
+    current = preset_height(row.get("preset") or "")
+    if current is None:
+        return []
+    base = [144, 240, 360, 480, 720, 1080, 1440, 2160]
+    heights = {h for h in base if h <= current}
+    heights.add(current)
+    return sorted(heights, reverse=True)
+
+
+@router.callback_query(F.data.startswith("play|"))
+async def on_playlist(
+    callback: CallbackQuery,
+    settings: Settings,
+    db: Database,
+    queue: JobQueue,
+) -> None:
+    if callback.message is None:
+        await callback.answer()
+        return
+    parts = (callback.data or "").split("|", 2)
+    if len(parts) != 3:
+        await callback.answer()
+        return
+
+    _, action, token = parts
+    choice = _playlists.get(token)
+    if choice is None:
+        await callback.answer(
+            "Bu liste artık geçersiz. Bağlantıyı tekrar gönderin.", show_alert=True
+        )
+        return
+    if callback.from_user.id != choice.user_id:
+        await callback.answer(
+            "Bu seçim başka bir kullanıcıya ait. Linki kendiniz gönderin.",
+            show_alert=True,
+        )
+        return
+    entries = choice.entries
+    if action == "cancel":
+        _playlists.pop(token, None)
+        await callback.answer("Liste iptal edildi 🚫")
+        with contextlib.suppress(TelegramBadRequest):
+            await callback.message.edit_text("🚫 Oynatma listesi iptal edildi.")
+        return
+
+    error = await _limit_error(callback.from_user.id, db, settings, queue)
+    if error:
+        await callback.answer(error, show_alert=True)
+        return
+
+    info = choice.info
+    level = min(PLAYLIST_FIRST, len(entries))
+    if action == "more":
+        level = min(settings.playlist_limit, len(entries))
+    elif action == "less":
+        level = min(PLAYLIST_FIRST, len(entries))
+    selected = _playlist_view(info, level)
+    if action in {"more", "less"}:
+        await callback.answer()
+        with contextlib.suppress(TelegramBadRequest):
+            await callback.message.edit_text(
+                playlist_summary(selected, settings, selected=level),
+                reply_markup=playlist_menu(
+                    info=selected,
+                    token=token,
+                    has_more=len(entries) > level,
+                    can_expand=settings.playlist_limit > level,
+                    level=1 if action == "more" else 0,
+                ),
+            )
+        return
+
+    await callback.answer("Sıraya alınıyor ⏳")
+    if action == "audio":
+        choice.audio = True
+    choice.user = await db.get_user(callback.from_user.id) or {}
+    await _start_playlist(
+        bot=callback.bot,
+        chat_id=callback.message.chat.id,
+        user_id=callback.from_user.id,
+        entries=entries,
+        choice=choice,
+        settings=settings,
+        db=db,
+        queue=queue,
+    )
+    _playlists.pop(token, None)

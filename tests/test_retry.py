@@ -58,7 +58,7 @@ class FlakyDownloader:
         self.dirs: list[Path] = []
 
     def download(
-        self, url: str, preset: str, outdir: Path, state: dict
+        self, url: str, preset: str, outdir: Path, state: dict, **kwargs
     ) -> Path:
         self.calls += 1
         self.dirs.append(outdir)

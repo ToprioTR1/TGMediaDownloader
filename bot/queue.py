@@ -84,8 +84,14 @@ class Job:
     video_width: int | None = None
     video_height: int | None = None
     video_duration: int | None = None
+    audio_bitrate: int = 192
+    video_codec: str = "auto"
     heights: list[int] = field(default_factory=list)
     error_text: str = ""
+    # Oynatma listesi alt isi: ust is kimligi ve sira bilgisi.
+    parent_id: str | None = None
+    playlist_index: int = 0
+    playlist_total: int = 0
 
     @property
     def cache_preset(self) -> str:
@@ -111,8 +117,13 @@ class Job:
             "video_width": self.video_width,
             "video_height": self.video_height,
             "video_duration": self.video_duration,
+            "audio_bitrate": self.audio_bitrate,
+            "video_codec": self.video_codec,
             "heights": list(self.heights),
             "error_text": self.error_text,
+            "parent_id": self.parent_id,
+            "playlist_index": self.playlist_index,
+            "playlist_total": self.playlist_total,
         }
         data.update(changes)
         return Job(**data)
@@ -513,6 +524,7 @@ class JobQueue:
                         job.preset,
                         attempt_dir,
                         state,
+                        audio_bitrate=job.audio_bitrate,
                     )
                 except DownloadCancelled:
                     await self._cancelled(job)
@@ -1083,8 +1095,14 @@ class JobQueue:
         if not job.show_caption:
             return None
         title = escape(job.title[:200])
-        label = video_label(job.cache_preset)
-        return f"<b>{title}</b>\n{job.platform} · {label} · {human_size(size)}"
+        label = video_label(
+            job.cache_preset,
+            bitrate=job.audio_bitrate,
+        )
+        lines = f"<b>{title}</b>\n{job.platform} · {label} · {human_size(size)}"
+        if job.playlist_total > 1 and job.playlist_index:
+            lines += f"\n📚 Oynatma listesi {job.playlist_index}/{job.playlist_total}"
+        return lines
 
     # --------------------------------------------------------------- yardimci
 
@@ -1318,6 +1336,22 @@ class JobQueue:
                 "⚠️ <b>Gönderim yanıtı alınamadı.</b>\n"
                 "Video geldiyse işlem tamamlandı. Gelmediyse linki tekrar gönderin.",
                 last_stage=last_stage,
+            ),
+            wait=True,
+        )
+        await self._status.forget(job.chat_id, job.status_message_id)
+
+    async def _cancelled(self, job: Job) -> None:
+        """Iptal edilen isi sessizce kapatir; hata kaydi ve retry butonu yok."""
+        job.status_stage = "cancelled"
+        log.info("Is iptal edildi: %s (%s)", job.id, job.url)
+        await self._status.edit(
+            job.chat_id,
+            job.status_message_id,
+            render_job_status(
+                job.status_header,
+                "cancelled",
+                "🚫 <b>İptal edildi.</b>\nYeni bir bağlantı gönderebilirsiniz.",
             ),
             wait=True,
         )

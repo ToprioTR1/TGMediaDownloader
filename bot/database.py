@@ -23,7 +23,10 @@ CREATE TABLE IF NOT EXISTS users (
     is_promoted     INTEGER NOT NULL DEFAULT 0,
     default_quality INTEGER NOT NULL DEFAULT 0,
     audio_default   INTEGER NOT NULL DEFAULT 0,
-    show_caption    INTEGER NOT NULL DEFAULT 1
+    show_caption    INTEGER NOT NULL DEFAULT 1,
+    audio_bitrate   INTEGER NOT NULL DEFAULT 192,
+    video_codec     TEXT NOT NULL DEFAULT 'auto',
+    download_mode   TEXT NOT NULL DEFAULT 'video'
 );
 
 CREATE TABLE IF NOT EXISTS chats (
@@ -126,6 +129,14 @@ class Database:
                 "width": "INTEGER",
                 "height": "INTEGER",
                 "duration": "INTEGER",
+            },
+        )
+        await self._add_columns(
+            "users",
+            {
+                "audio_bitrate": "INTEGER NOT NULL DEFAULT 192",
+                "video_codec": "TEXT NOT NULL DEFAULT 'auto'",
+                "download_mode": "TEXT NOT NULL DEFAULT 'video'",
             },
         )
         # Bu surumden once kaydedilen videolarda width/height yok. Telegram'da
@@ -245,6 +256,9 @@ class Database:
         default_quality: int | None = None,
         audio_default: bool | None = None,
         show_caption: bool | None = None,
+        audio_bitrate: int | None = None,
+        video_codec: str | None = None,
+        download_mode: str | None = None,
     ) -> bool:
         fields: list[str] = []
         params: list[Any] = []
@@ -257,6 +271,15 @@ class Database:
         if show_caption is not None:
             fields.append("show_caption = ?")
             params.append(1 if show_caption else 0)
+        if audio_bitrate is not None:
+            fields.append("audio_bitrate = ?")
+            params.append(int(audio_bitrate))
+        if video_codec is not None:
+            fields.append("video_codec = ?")
+            params.append(video_codec)
+        if download_mode is not None:
+            fields.append("download_mode = ?")
+            params.append(download_mode)
         if not fields:
             return False
 

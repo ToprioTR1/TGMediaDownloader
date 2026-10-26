@@ -58,6 +58,8 @@ class Settings:
     cache_days: int
     gallery_enabled: bool
     gallery_limit: int
+    playlist_limit: int
+    playlist_max_total_sec: int
     log_level: str
 
     @classmethod
@@ -99,6 +101,10 @@ class Settings:
             cache_days=max(0, _env_int("CACHE_DAYS", 30)),
             gallery_enabled=_env_bool("GALLERY_ENABLED", True),
             gallery_limit=max(1, min(10, _env_int("GALLERY_LIMIT", 10))),
+            playlist_limit=max(1, min(20, _env_int("PLAYLIST_LIMIT", 5))),
+            playlist_max_total_sec=max(
+                0, _env_int("PLAYLIST_MAX_TOTAL_SEC", 1800)
+            ),
             log_level=_env_str("LOG_LEVEL", "INFO").upper(),
         )
 
