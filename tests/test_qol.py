@@ -4,6 +4,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.methods import EditMessageText
+from aiogram.types import FSInputFile
+
 from bot.downloader import Downloader, MediaInfo
 from bot.database import Database
 from bot.qol import (
@@ -479,6 +483,112 @@ class QuotaTextTests(unittest.TestCase):
     def test_warning_texts(self) -> None:
         self.assertIn("%80", quota_warning_text(int(0.8 * 1024**3), 1, 80))
         self.assertIn("doldu", quota_warning_text(1024**3, 1, 100))
+
+
+class VideoConversionTests(unittest.IsolatedAsyncioTestCase):
+    async def _queue(self, raw: str, bot):
+        settings = SimpleNamespace(
+            concurrency=1,
+            download_dir=Path(raw),
+            max_queue_per_user=5,
+            daily_limit=0,
+            cache_days=0,
+            max_upload_bytes=50 * 1024 * 1024,
+            max_upload_mb=50,
+            upload_timeout_sec=30,
+            gallery_enabled=False,
+            playlist_limit=5,
+            playlist_max_total_sec=1800,
+            monthly_traffic_gb=0,
+            admin_ids=frozenset(),
+        )
+        return JobQueue(
+            bot,
+            SimpleNamespace(is_promoted=AsyncMock(return_value=False)),
+            settings,
+            SimpleNamespace(),
+        )  # type: ignore[arg-type]
+
+    async def test_unplayable_video_is_converted_and_resent(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="convert-") as raw:
+            bot = _VideoBot()
+            queue = await self._queue(raw, bot)
+            path = Path(raw) / "video.mp4"
+            path.write_bytes(b"original")
+            converted = Path(raw) / "video-telegram.mp4"
+            converted.write_bytes(b"converted")
+
+            async def fake_convert(_path):
+                return converted
+
+            queue._convert_video = fake_convert  # type: ignore[method-assign]
+            job = Job(
+                id="v1",
+                user_id=42,
+                chat_id=42,
+                status_message_id=1,
+                url="https://example.com/v",
+                preset="h:720",
+                title="Test",
+                platform="YouTube",
+            )
+            _msg, kind = await queue._send_file(
+                job, FSInputFile(path), 42, None, None, False
+            )
+            self.assertEqual(kind, "video")
+            self.assertEqual(bot.video_calls, 2)
+            self.assertEqual(bot.documents, 0)
+
+    async def test_conversion_failure_falls_back_to_document(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="convert-") as raw:
+            bot = _VideoBot()
+            queue = await self._queue(raw, bot)
+            path = Path(raw) / "video.mp4"
+            path.write_bytes(b"original")
+
+            async def no_convert(_path):
+                return None
+
+            queue._convert_video = no_convert  # type: ignore[method-assign]
+            job = Job(
+                id="v2",
+                user_id=42,
+                chat_id=42,
+                status_message_id=1,
+                url="https://example.com/v",
+                preset="h:720",
+                title="Test",
+                platform="YouTube",
+            )
+            _msg, kind = await queue._send_file(
+                job, FSInputFile(path), 42, None, None, False
+            )
+            self.assertEqual(kind, "document")
+            self.assertEqual(bot.documents, 1)
+
+
+class _VideoBot(_FakeBot):
+    def __init__(self) -> None:
+        super().__init__()
+        self.video_calls = 0
+        self.documents = 0
+
+    async def send_video(self, **kwargs):
+        self.video_calls += 1
+        if self.video_calls == 1:
+            raise TelegramBadRequest(
+                method=EditMessageText(chat_id=1, message_id=1, text="x"),
+                message="Bad Request: wrong file identifier/HTTP URL specified",
+            )
+        return SimpleNamespace(
+            message_id=1, video=SimpleNamespace(file_id="vid_converted")
+        )
+
+    async def send_document(self, **kwargs):
+        self.documents += 1
+        return SimpleNamespace(
+            message_id=1, document=SimpleNamespace(file_id="doc_fallback")
+        )
 
 
 class MonthlyQuotaTests(unittest.IsolatedAsyncioTestCase):

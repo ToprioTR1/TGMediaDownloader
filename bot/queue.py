@@ -37,7 +37,7 @@ from .database import Database
 from .downloader import DownloadCancelled, DownloadError, Downloader
 from .gallery import VIDEO_EXT, GalleryDownloader, GalleryError
 from .keyboards import gallery_keyboard
-from .media import VideoMeta, inspect_video, keep_thumbnail
+from .media import VideoMeta, convert_for_telegram, inspect_video, keep_thumbnail
 from .qol import (
     TEXT_CANCEL,
     error_category,
@@ -1061,6 +1061,13 @@ class JobQueue:
             log.exception("Video metadata okunamadi: %s", path)
             return None
 
+    async def _convert_video(self, path: Path) -> Path | None:
+        try:
+            return await asyncio.to_thread(convert_for_telegram, path, path.parent)
+        except Exception:  # noqa: BLE001 - donusum gonderimi durdurmasin
+            log.exception("Video donusumu basarisiz: %s", path)
+            return None
+
     async def _send_file(
         self,
         job: Job,
@@ -1071,6 +1078,7 @@ class JobQueue:
         is_audio: bool,
         *,
         video_meta: VideoMeta | None = None,
+        converted: bool = False,
     ) -> tuple[Message, str]:
         for attempt in range(2):
             try:
@@ -1133,6 +1141,43 @@ class JobQueue:
                         "Telegram bu dosyayı kabul etmedi (boyut limiti). "
                         "Daha düşük kalite deneyin."
                     ) from exc
+                if (
+                    not converted
+                    and not job.as_document
+                    and not is_audio
+                    and job.video_codec != "h264"
+                ):
+                    await self._set_stage(
+                        job,
+                        "sending",
+                        "🔄 <b>Telegram uyumlu sürüm hazırlanıyor…</b>",
+                    )
+                    converted_path = await self._convert_video(Path(file.path))
+                    if converted_path is not None:
+                        if (
+                            converted_path.stat().st_size
+                            > self._settings.max_upload_bytes
+                        ):
+                            raise DownloadError(
+                                "Dönüştürülen video Telegram limitini aşıyor. "
+                                "Daha düşük kalite deneyin."
+                            ) from exc
+                        log.info(
+                            "Video H.264'e cevrildi, yeniden gonderiliyor: %s",
+                            converted_path,
+                        )
+                        return await self._send_file(
+                            job,
+                            FSInputFile(
+                                converted_path, filename=converted_path.name
+                            ),
+                            chat_id,
+                            caption,
+                            keyboard,
+                            is_audio,
+                            video_meta=video_meta,
+                            converted=True,
+                        )
                 log.warning("Video olarak gonderilemedi, belge olarak deneniyor: %s", exc)
                 msg = await self._bot.send_document(
                     chat_id=chat_id,

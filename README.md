@@ -35,6 +35,8 @@ Built with Python 3.12 + [aiogram 3](https://github.com/aiogram/aiogram) +
   without re-downloading when possible; also shown in groups
 - 🎚 The quality menu shows the estimated size of each option and marks ones
   above `MAX_UPLOAD_MB` with ⚠️
+- 🔄 If Telegram rejects a video's codec, the bot re-encodes it to H.264 once
+  and resends; if that also fails it falls back to sending a document
 - 🧠 Smart errors: depending on the failure the card offers retry, a lower
   quality, sending as a file, or opening the source, with a one-line hint
 - 🕒 Queue position (`🕒 2/3`) and a `❌ Cancel` button while a job is waiting
@@ -480,6 +482,10 @@ make no network requests.
   admins get one warning at 80% and one at 100% per month; at 100% new jobs are
   refused until the quota is raised (running jobs finish normally). Quota usage
   counts upload + download.
+- If Telegram rejects a video with a non-size error (typically an unplayable
+  VP9/AV1 codec), the bot re-encodes it to H.264/AAC once with ffmpeg and resends
+  it. If ffmpeg is unavailable, conversion fails, or the converted file exceeds
+  the limit, the file is sent as a document instead.
 - Videos are kept in a `dl-*` temporary directory and deleted after sending; they
   do not accumulate on the server. Leftover `dl-*` entries older than 6 hours are
   removed by a janitor every 30 minutes; other files in `DOWNLOAD_DIR` are left

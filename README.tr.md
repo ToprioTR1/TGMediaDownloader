@@ -32,6 +32,8 @@ ile yazıldı, Docker ile çalışacak şekilde hazırlandı.
   gruplarda da görünür
 - 🎚 Kalite menüsü her seçeneğin tahmini boyutunu gösterir; `MAX_UPLOAD_MB`
   üstündekileri ⚠️ ile işaretler
+- 🔄 Telegram videonun kodeğini kabul etmezse bir kez H.264'e çevirip yeniden
+  gönderir; o da olmazsa belge olarak gönderir
 - 🧠 Akıllı hatalar: hataya göre yeniden dene, daha düşük kalite, dosya olarak
   gönder veya kaynağı aç butonu ve tek satırlık bir öneri
 - 🕒 Kuyruk sırası (`🕒 2/3`) ve iş beklerken/indirilirken `❌ İptal` butonu
@@ -470,6 +472,10 @@ kullanır ve ağ isteği yapmaz.
   %100'de bir kez admin uyarısı gider; %100'de kota artırılana kadar yeni işler
   reddedilir (çalışan işler normal biter). Kota kullanımı upload + download
   toplamıdır.
+- Telegram bir videoyu boyut dışı bir hatayla reddederse (genelde oynatılamayan
+  VP9/AV1 kodeği), bot ffmpeg ile bir kez H.264/AAC'ye çevirip yeniden gönderir.
+  ffmpeg yoksa, dönüşüm başarısızsa veya dönüşen dosya limiti aşarsa belge
+  olarak gönderilir.
 - Videolar `dl-*` geçici klasöründe tutulur ve gönderimden sonra silinir;
   sunucuda birikmez. 6 saatten eski artık `dl-*` girdileri 30 dakikada bir çalışan
   temizlik göreviyle silinir; `DOWNLOAD_DIR` içindeki diğer dosyalara dokunulmaz.

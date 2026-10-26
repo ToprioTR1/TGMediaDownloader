@@ -25,6 +25,7 @@ _THUMBNAIL_MAX = 320
 _THUMBNAIL_MAX_BYTES = 200 * 1024
 _FFPROBE_TIMEOUT = 30
 _FFMPEG_TIMEOUT = 30
+_CONVERT_TIMEOUT = 900
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,3 +208,54 @@ def remove_thumbnail(path: str | None, directory: Path) -> None:
     if root not in candidate.parents:
         return
     candidate.unlink(missing_ok=True)
+
+
+def convert_for_telegram(path: Path, outdir: Path | None = None) -> Path | None:
+    """Videoyu Telegram'in oynatabildigi H.264/AAC MP4'e cevirir.
+
+    Bazi VP9/AV1 dosyalarini Telegram oynatamiyor; bu durumda bir kez
+    donusturup yeniden gondermeyi deneriz. ffmpeg yoksa veya donusum
+    basarisizsa None doner (cagiran belge olarak gondermeye duser).
+    """
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg or not path.is_file():
+        return None
+    target_dir = outdir or path.parent
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / f"{path.stem}-telegram.mp4"
+    cmd = [
+        ffmpeg,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        str(path),
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "23",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+        "-movflags",
+        "+faststart",
+        "-max_muxing_queue_size",
+        "1024",
+        str(target),
+    ]
+    proc = _run(cmd, _CONVERT_TIMEOUT)
+    if proc is None or proc.returncode != 0:
+        target.unlink(missing_ok=True)
+        if proc is not None and proc.stderr:
+            log.info("Telegram donusumu basarisiz: %s", proc.stderr[-300:])
+        return None
+    if not target.is_file() or target.stat().st_size <= 0:
+        target.unlink(missing_ok=True)
+        return None
+    return target
