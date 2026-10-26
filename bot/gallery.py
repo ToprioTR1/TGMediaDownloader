@@ -1,7 +1,7 @@
-"""gallery-dl sarmalayicisi: Instagram ve TikTok fotoğraf gönderileri icin.
+"""gallery-dl sarmalayicisi: Instagram, TikTok ve Pinterest medya icin.
 
-yt-dlp video odaklidir; fotoğraf, carousel veya TikTok fotoğraf paylaşımı
-gönderilerinde gallery-dl kullanilir. Alt surec olarak calisir, bu yuzden
+yt-dlp video odaklidir; fotoğraf, carousel veya Pinterest pinlerinde
+gallery-dl kullanilir. Alt surec olarak calisir, bu yuzden
 `asyncio.to_thread` ile cagrilmalidir.
 """
 

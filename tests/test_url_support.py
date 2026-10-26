@@ -22,12 +22,14 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from bot.downloader import DownloadError, ytdlp_supports_url  # noqa: E402
+from bot.downloader import DownloadError, MediaInfo, ytdlp_supports_url  # noqa: E402
 from bot.gallery import GalleryDownloader, _queued_urls  # noqa: E402
 from bot.handlers.download import (  # noqa: E402
     _gallery_platform,
     _gallery_title,
     _gallery_url,
+    _needs_gallery,
+    _pinterest_url,
     _process_text,
     _tiktok_photo_url,
     on_text,
@@ -101,10 +103,46 @@ class UrlSupportTests(unittest.TestCase):
             _gallery_platform("https://www.instagram.com/p/abc/"), "Instagram"
         )
         self.assertEqual(
+            _gallery_platform("https://www.pinterest.com/pin/123456/"),
+            "Pinterest",
+        )
+        self.assertEqual(_gallery_title([], "Pinterest"), "Pinterest gönderisi")
+        self.assertEqual(
             _gallery_title([{"desc": "TikTok başlığı"}], "TikTok"),
             "TikTok başlığı",
         )
         self.assertEqual(_gallery_title([], "TikTok"), "TikTok gönderisi")
+
+    def test_pinterest_urls_use_gallery(self) -> None:
+        for url in (
+            "https://www.pinterest.com/pin/123456/",
+            "https://pinterest.com/pin/123456/",
+            "https://tr.pinterest.com/pin/123456/",
+            "https://pin.it/abc123",
+        ):
+            self.assertTrue(_gallery_url(url), url)
+            self.assertTrue(_pinterest_url(url), url)
+        for url in (
+            "https://www.pinterest.com.evil.example/pin/123456/",
+            "https://evil.example/?u=https://pin.it/abc123",
+        ):
+            self.assertFalse(_pinterest_url(url), url)
+
+    def test_pinterest_image_pin_needs_gallery(self) -> None:
+        info = MediaInfo(
+            url="https://www.pinterest.com/pin/1/",
+            title="Pin",
+            uploader=None,
+            duration=None,
+            thumbnail=None,
+            heights=[],
+            has_audio=True,
+            platform="Pinterest",
+            webpage_url="https://www.pinterest.com/pin/1/",
+        )
+        self.assertTrue(_needs_gallery(info))
+        info.heights = [720]
+        self.assertFalse(_needs_gallery(info))
 
 
 class GalleryQueueParsingTests(unittest.TestCase):
@@ -344,6 +382,41 @@ class UnsupportedUrlHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(queue.edited, [])
         self.assertEqual(queue.deleted, [(123, 77)])
         self.assertEqual(queue.forgotten, [(123, 77)])
+
+
+class PinterestFallbackTests(unittest.IsolatedAsyncioTestCase):
+    async def test_pinterest_pin_uses_gallery(self) -> None:
+        url = "https://www.pinterest.com/pin/123456/"
+        bot = _FakeBot()
+        downloader = _TikTokDownloader()
+        gallery = _GalleryWithItems()
+        queue = _GalleryQueue()
+
+        with patch(
+            "bot.handlers.download.is_blocked_url",
+            new=AsyncMock(return_value=False),
+        ):
+            await _process_text(
+                bot,  # type: ignore[arg-type]
+                123,
+                42,
+                url,
+                settings=SimpleNamespace(  # type: ignore[arg-type]
+                    max_queue_per_user=5,
+                    daily_limit=0,
+                ),
+                db=_FakeDb(),  # type: ignore[arg-type]
+                downloader=downloader,  # type: ignore[arg-type]
+                gallery=gallery,  # type: ignore[arg-type]
+                queue=queue,  # type: ignore[arg-type]
+            )
+
+        self.assertEqual(downloader.probed, [])
+        self.assertEqual(gallery.probed, [url])
+        self.assertEqual(len(queue.submitted), 1)
+        job = queue.submitted[0]
+        self.assertEqual(job.platform, "Pinterest")
+        self.assertEqual(job.kind, "gallery")
 
 
 class TikTokPhotoFallbackTests(unittest.IsolatedAsyncioTestCase):

@@ -2,7 +2,7 @@
 
 **Diller:** Türkçe · [English](README.md)
 
-Instagram, YouTube, TikTok, X (Twitter), Facebook ve yt-dlp'nin desteklediği
+Instagram, YouTube, TikTok, X (Twitter), Facebook, Pinterest ve yt-dlp'nin desteklediği
 yüzlerce siteden video indirip Telegram üzerinden gönderen bot.
 
 Python 3.12 + [aiogram 3](https://github.com/aiogram/aiogram) + [yt-dlp](https://github.com/yt-dlp/yt-dlp)
@@ -39,9 +39,9 @@ ile yazıldı, Docker ile çalışacak şekilde hazırlandı.
 - 🚦 Yalnızca yt-dlp site eşleştiricisinin tanıdığı URL'ler (veya sitelerin
   resmi kısa link alan adları) işlenir; normal web sayfaları ağ isteği
   yapılmadan ve mesaj yazılmadan yok sayılır
-- 🖼 Instagram fotoğraf / carousel ve TikTok fotoğraf gönderileri (gallery-dl
-  ile; herkese açık Instagram gönderileri için embed yedeğiyle; albüm olarak,
-  `dosya` yazılırsa belge olarak)
+- 🖼 Instagram fotoğraf / carousel, TikTok fotoğraf ve Pinterest pin gönderileri
+  (gallery-dl ile; herkese açık Instagram gönderileri için embed yedeğiyle;
+  albüm olarak, `dosya` yazılırsa belge olarak)
 - 🚫 Her Python TCP `connect` anında SSRF koruması: yönlendirmeler, DNS
   rebinding, ikincil medya URL'leri ve bulut metadata adresleri reddedilir;
   konteyner çıkışı için host güvenlik duvarı yapılandırması dahildir
@@ -160,7 +160,7 @@ Tüm ayarlar `.env` üzerinden okunur ([bot/config.py](bot/config.py)):
 | `QUALITY_YOUTUBE` | `720` | Kalite yazılmayan YouTube linklerinde hedef |
 | `QUALITY_DEFAULT` | `720` | Diğer platformlar için hedef |
 | `CACHE_DAYS` | `30` | `file_id` önbellek süresi, gün (0 = kapalı) |
-| `GALLERY_ENABLED` | `1` | Instagram/TikTok fotoğraf desteği (gallery-dl) |
+| `GALLERY_ENABLED` | `1` | Instagram/TikTok/Pinterest fotoğraf desteği (gallery-dl) |
 | `GALLERY_LIMIT` | `10` | Gönderi başına en fazla medya (Telegram albüm limiti 10) |
 | `AUTO_UPDATE_YTDLP` | `1` | Docker açılışında yt-dlp + gallery-dl güncelle |
 | `COOKIES_FILE` | — | `cookies.txt` yolu (çerez gereken siteler için) |
@@ -392,7 +392,7 @@ bot/
 ├── config.py        # .env → Settings (+ platform kalite varsayılanları)
 ├── database.py      # SQLite: kullanıcılar, indirmeler, file_id önbelleği
 ├── downloader.py    # yt-dlp: probe (metadata + boyut tahmini) + indirme
-├── gallery.py       # gallery-dl: Instagram/TikTok fotoğraf indirme
+├── gallery.py       # gallery-dl: Instagram/TikTok/Pinterest fotoğraf indirme
 ├── media.py         # ffprobe metadata + Telegram JPEG önizlemesi
 ├── queue.py         # iş kuyruğu, işçiler, ilerleme, önbellek, Telegram gönderimi
 ├── keyboards.py     # inline klavyeler (video aksiyonları, admin paneli)
@@ -495,9 +495,9 @@ kullanır ve ağ isteği yapmaz.
   bilgisiyle gönderilir. Bu, özellikle yaklaşık 10 MB'tan büyük dosyalarda
   Telegram'daki en-boy oranını korur. ffprobe/ffmpeg yoksa bot eski davranışa
   döner.
-- Instagram fotoğraf/carousel ve TikTok fotoğraf gönderileri gallery-dl ile
-  indirilir; video içeren gönderilerde kalite seçimi için yt-dlp kullanılır.
-  Instagram gallery-dl'yi giriş sayfasına yönlendirirse herkese açık
+- Instagram fotoğraf/carousel, TikTok fotoğraf ve Pinterest pin gönderileri
+  gallery-dl ile indirilir; video içeren gönderilerde kalite seçimi için yt-dlp
+  kullanılır. Instagram gallery-dl'yi giriş sayfasına yönlendirirse herkese açık
   fotoğraf/carousel gönderileri embed sayfasından okunur; özel gönderiler için
   yine `cookies.txt` gerekir.
 - `file_id` önbelleği SQLite'ta tutulur (`CACHE_DAYS`, varsayılan 30 gün).

@@ -74,7 +74,12 @@ _probe_infos: dict[str, MediaInfo] = {}
 _playlists: dict[str, _PlaylistChoice] = {}
 _quality_states: dict[str, list[int]] = {}
 PROBE_TIMEOUT = 90
-GALLERY_HOSTS = ("instagram.com", "instagr.am")
+GALLERY_HOSTS = (
+    "instagram.com",
+    "instagr.am",
+    "pinterest.com",
+    "pin.it",
+)
 TIKTOK_SHORT_HOSTS = {"vm.tiktok.com", "vt.tiktok.com"}
 
 PLAYLIST_FIRST = 3
@@ -144,7 +149,21 @@ def _gallery_url(url: str) -> bool:
 
 
 def _gallery_platform(url: str) -> str:
-    return "TikTok" if _is_tiktok_host(_url_host(url)) else "Instagram"
+    host = _url_host(url)
+    if "pinterest" in host or host == "pin.it" or host.endswith(".pin.it"):
+        return "Pinterest"
+    return "TikTok" if _is_tiktok_host(host) else "Instagram"
+
+
+def _pinterest_url(url: str) -> bool:
+    """Pinterest pin/board URL'si mi? (Kisa pin.it linkleri dahil.)"""
+    host = _url_host(url)
+    return (
+        host == "pinterest.com"
+        or host.endswith(".pinterest.com")
+        or host == "pin.it"
+        or host.endswith(".pin.it")
+    )
 
 
 def _supports_url(
@@ -159,7 +178,13 @@ def _supports_url(
 
 
 def _needs_gallery(info: MediaInfo) -> bool:
-    """Video/ses akışı olmayan Instagram/TikTok gönderisi fotoğraftır."""
+    """Video/ses akışı olmayan fotoğraf gönderisi mi?
+
+    Pinterest pinleri fotoğraf veya video olabilir; video akışı yoksa
+    gallery-dl'ye devredilir.
+    """
+    if info.platform == "Pinterest":
+        return not info.heights
     return (
         info.platform in {"Instagram", "TikTok"}
         and not info.heights
@@ -766,12 +791,18 @@ async def _process_text(
         info: MediaInfo | None = None
         gallery_items: list[dict] | None = None
         gallery_checked = False
+        gallery_prefetched = False
 
         # yt-dlp TikTok fotoğraf gönderilerini desteklemiyor; doğrudan
         # gallery-dl kullan. Kısa linkler önce yt-dlp ile denenir.
         if _tiktok_photo_url(url) and gallery.available:
             gallery_items = await _probe_gallery(gallery, url)
             gallery_checked = True
+        elif _pinterest_url(url) and gallery.available:
+            # Pinterest pinleri fotoğraf veya video olabilir. gallery-dl
+            # ikisini de indirir; bos donerse yt-dlp ile video denenir.
+            gallery_items = await _probe_gallery(gallery, url)
+            gallery_prefetched = True
 
         async def _retry_notice() -> None:
             await queue.edit_status(
@@ -799,7 +830,7 @@ async def _process_text(
             await queue.forget_status(chat_id, status.message_id)
             continue
         except DownloadError as exc:
-            if not gallery_checked and _gallery_url(url):
+            if not gallery_checked and not gallery_prefetched and _gallery_url(url):
                 gallery_items = await _probe_gallery(gallery, url)
             if not gallery_items:
                 if gallery_checked:
