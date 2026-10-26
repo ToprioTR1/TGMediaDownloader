@@ -74,6 +74,7 @@ _probe_retries: dict[str, tuple[int, int, int, str, str]] = {}
 _probe_infos: dict[str, MediaInfo] = {}
 _playlists: dict[str, _PlaylistChoice] = {}
 _quality_states: dict[str, list[int]] = {}
+_quality_sizes: dict[str, dict[int, int]] = {}
 PROBE_TIMEOUT = 90
 GALLERY_HOSTS = (
     "instagram.com",
@@ -507,8 +508,11 @@ async def _resolve_and_queue(
         playlist_total=total or 0,
     )
     _quality_states[job.url] = list(info.heights)
+    _quality_sizes[job.url] = dict(info.estimated_sizes)
     while len(_quality_states) > 500:
-        _quality_states.pop(next(iter(_quality_states)))
+        old = next(iter(_quality_states))
+        _quality_states.pop(old, None)
+        _quality_sizes.pop(old, None)
     try:
         queued = await queue.submit(job)
     except QueueFullError as exc:
@@ -1224,9 +1228,12 @@ async def _queue_with_status(
             origin_message.message_id,
         )
     # Kalite menusu icin mevcut kaliteleri buton durumundan tasi.
-    _quality_states[job.url] = list(heights or [])
+    if heights:
+        _quality_states[job.url] = list(heights)
     while len(_quality_states) > 500:
-        _quality_states.pop(next(iter(_quality_states)))
+        old = next(iter(_quality_states))
+        _quality_states.pop(old, None)
+        _quality_sizes.pop(old, None)
     status = await queue.send_status(chat_id, "⬇️ <b>Hazırlanıyor…</b>")
     job.status_message_id = status.message_id
     try:
@@ -1369,6 +1376,8 @@ async def on_action(
                     row.get("preset") or "",
                     heights,
                     cache_key=key,
+                    sizes=_quality_sizes.get(row.get("url") or ""),
+                    max_upload_mb=settings.max_upload_mb,
                 )
             )
         return

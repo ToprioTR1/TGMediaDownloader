@@ -33,6 +33,8 @@ Built with Python 3.12 + [aiogram 3](https://github.com/aiogram/aiogram) +
 - 🔘 Quick actions under every video: `🎵 Get audio` · `🎚 Change quality` ·
   `📄 Send as file` · `🖼 Cover photo`, all served from the `file_id` cache
   without re-downloading when possible; also shown in groups
+- 🎚 The quality menu shows the estimated size of each option and marks ones
+  above `MAX_UPLOAD_MB` with ⚠️
 - 🧠 Smart errors: depending on the failure the card offers retry, a lower
   quality, sending as a file, or opening the source, with a one-line hint
 - 🕒 Queue position (`🕒 2/3`) and a `❌ Cancel` button while a job is waiting

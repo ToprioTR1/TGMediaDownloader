@@ -1510,6 +1510,12 @@ async def main() -> int:
             24,
             str(cover_file),
         )
+        # Kalite menusunde tahmini boyutlar gorunmeli.
+        download._quality_states[q_url] = [1080, 720, 360]
+        download._quality_sizes[q_url] = {
+            1080: 60 * 1024 * 1024,
+            720: 20 * 1024 * 1024,
+        }
         video_msg = simple_message("video", 9600).as_(bot)
         video_msg = video_msg.model_copy(
             update={
@@ -1552,8 +1558,20 @@ async def main() -> int:
                 (b.callback_data or "").endswith(q_key),
                 f"kalite butonu onbellek anahtarini tasimiyor: {b.callback_data}",
             )
+        check(
+            any("~" in b.text for b in quality_buttons),
+            f"kalite menusunde tahmini boyut yok: {[b.text for b in quality_buttons]}",
+        )
+        check(
+            any("⚠️" in b.text for b in quality_buttons),
+            f"limit ustu kalite isaretlenmedi: {[b.text for b in quality_buttons]}",
+        )
 
-        pick = quality_buttons[0].callback_data or ""
+        pick = next(
+            b.callback_data or ""
+            for b in quality_buttons
+            if "720p" in b.text
+        )
         pick_mark = len(bot.calls)
         await dp.feed_update(bot, callback_update(pick, video_msg))
         answers = [

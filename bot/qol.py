@@ -304,24 +304,32 @@ def quality_menu(
     current_preset: str,
     heights: list[int] | None = None,
     cache_key: str | None = None,
+    sizes: dict[int, int] | None = None,
+    max_upload_mb: int = 0,
 ) -> InlineKeyboardMarkup:
     """Kalite secenekleri: mevcut kaliteler + MP3.
 
-    `heights` bossa 360/720/1080 gosterilir. `cache_key` verilirse butonlar
-    medyanin onbellek anahtarini tasir; boylece secim dogru kayda gider.
+    `sizes` verilirse her kalitenin tahmini boyutu da yazilir; limiti asanlar
+    `⚠️` ile isaretlenir. `cache_key` butonlarin dogru kayda gitmesini saglar.
     """
     options = sorted({h for h in (heights or []) if h >= 144}, reverse=True)
     if not options:
         options = [1080, 720, 360]
     options = options[:5]
+    limit = max_upload_mb * 1024 * 1024 if max_upload_mb else 0
     rows: list[list[InlineKeyboardButton]] = []
     row: list[InlineKeyboardButton] = []
     for height in options:
         preset = f"h:{height}"
         mark = "✓ " if preset == current_preset else ""
+        size = (sizes or {}).get(height)
+        label = f"{mark}{height}p"
+        if size:
+            too_big = bool(limit and size > limit)
+            label += f" · {'⚠️ ' if too_big else '~'}{human_size(size)}"
         row.append(
             InlineKeyboardButton(
-                text=f"{mark}{height}p",
+                text=label,
                 callback_data=f"act|quality|{height}|{cache_key or ''}",
             )
         )

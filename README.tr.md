@@ -30,6 +30,8 @@ ile yazıldı, Docker ile çalışacak şekilde hazırlandı.
   `🎚 Kalite değiştir` · `📄 Dosya olarak gönder` · `🖼 Kapak fotoğrafı`;
   mümkün olduğunda yeniden indirmeden `file_id` önbelleğinden çalışır ve
   gruplarda da görünür
+- 🎚 Kalite menüsü her seçeneğin tahmini boyutunu gösterir; `MAX_UPLOAD_MB`
+  üstündekileri ⚠️ ile işaretler
 - 🧠 Akıllı hatalar: hataya göre yeniden dene, daha düşük kalite, dosya olarak
   gönder veya kaynağı aç butonu ve tek satırlık bir öneri
 - 🕒 Kuyruk sırası (`🕒 2/3`) ve iş beklerken/indirilirken `❌ İptal` butonu

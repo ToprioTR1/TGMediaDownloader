@@ -189,6 +189,23 @@ class SmartErrorTests(unittest.TestCase):
             self.assertEqual(len(parts), 4)
             self.assertEqual(parts[-1], cache_key)
 
+    def test_quality_menu_shows_estimated_sizes(self) -> None:
+        menu = quality_menu(
+            "h:720",
+            [1080, 720, 360],
+            cache_key="k" * 32,
+            sizes={1080: 60 * 1024 * 1024, 720: 20 * 1024 * 1024},
+            max_upload_mb=50,
+        )
+        labels = [b.text for b in _buttons(menu)]
+        big = next(label for label in labels if "1080p" in label)
+        small = next(label for label in labels if "720p" in label)
+        self.assertIn("⚠️", big)
+        self.assertIn("60.0 MB", big)
+        self.assertIn("~20.0 MB", small)
+        # Boyut bilinmeyen kalite sadece yukseklik gosterir.
+        self.assertTrue(any("360p" in label and "MB" not in label for label in labels))
+
 
 class PlaylistTests(unittest.TestCase):
     def test_summary_lists_first_entries_and_total(self) -> None:
