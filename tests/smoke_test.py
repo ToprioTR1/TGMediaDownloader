@@ -72,6 +72,7 @@ from bot.status import StatusHub  # noqa: E402
 from bot.utils import (  # noqa: E402
     is_blocked_host,
     is_blocked_url,
+    media_cache_key,
     nearest_height,
     parse_quality,
     wants_document,
@@ -1422,6 +1423,78 @@ async def main() -> int:
         ):
             check(expected in labels, f"video butonu yok: {expected}")
         print("27) video alti butonlar OK")
+
+        # 27b) kalite menusu gercek medya uzerinde calisiyor mu?
+        q_url = "https://example.com/qmenu-video"
+        q_key = media_cache_key(q_url, "h:720")
+        await db.cache_put(
+            q_key,
+            q_url,
+            "h:720",
+            "vid_menu_file",
+            "video",
+            "Kalite testi",
+            "YouTube",
+            5 * 1024 * 1024,
+            1080,
+            1920,
+            24,
+        )
+        video_msg = simple_message("video", 9600).as_(bot)
+        video_msg = video_msg.model_copy(
+            update={
+                "video": Video(
+                    file_id="vid_file",
+                    file_unique_id="uvid_file",
+                    width=1080,
+                    height=1920,
+                    duration=24,
+                )
+            }
+        ).as_(bot)
+        menu_mark = len(bot.calls)
+        await dp.feed_update(bot, callback_update(f"act|qmenu|{q_key}", video_msg))
+        menu_edits = [
+            c
+            for c in bot.calls[menu_mark:]
+            if c[0] == "edit_message_reply_markup"
+        ]
+        check(bool(menu_edits), "kalite menusu acilmadi")
+        menu_buttons = [
+            b
+            for row in (menu_edits[-1][1]["reply_markup"].inline_keyboard or [])
+            for b in row
+        ]
+        quality_buttons = [
+            b
+            for b in menu_buttons
+            if (b.callback_data or "").startswith("act|quality|")
+        ]
+        check(bool(quality_buttons), "kalite secenekleri yok")
+        for b in quality_buttons:
+            check(
+                (b.callback_data or "").endswith(q_key),
+                f"kalite butonu onbellek anahtarini tasimiyor: {b.callback_data}",
+            )
+
+        pick = quality_buttons[0].callback_data or ""
+        pick_mark = len(bot.calls)
+        await dp.feed_update(bot, callback_update(pick, video_msg))
+        answers = [
+            (c[1].get("text") or "")
+            for c in bot.calls[pick_mark:]
+            if c[0] == "answer_callback_query"
+        ]
+        check(
+            not any("önbellekte yok" in a for a in answers),
+            f"kalite secimi onbellege ulasamadi: {answers}",
+        )
+        check(
+            bool([c for c in bot.calls[pick_mark:] if c[0] == "send_message"]),
+            "kalite secimi yeni indirme baslatmadi",
+        )
+        await asyncio.wait_for(queue._queue.join(), timeout=180)
+        print("27b) kalite menusu OK")
 
         # 28) akilli hata butonlari: boyut hatasi + daha dusuk kalite
         failed = Job(

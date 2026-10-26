@@ -1177,12 +1177,38 @@ async def on_action(
     db: Database,
     queue: JobQueue,
 ) -> None:
-    parts = (callback.data or "").split("|", 2)
-    if len(parts) != 3 or callback.message is None:
+    # Kalite menusu butonlari "act|quality|<yukseklik>|<onbellek_anahtari>"
+    # bicimindedir; anahtar callback_data sinirini asmamak icin sonda durur.
+    parts = (callback.data or "").split("|", 3)
+    if len(parts) < 3 or callback.message is None:
         await callback.answer()
         return
 
-    _, action, key = parts
+    _, action, key = parts[0], parts[1], parts[2]
+    selected_from_menu = parts[3] if len(parts) > 3 else ""
+    if action == "quality" and selected_from_menu:
+        # key = secilen kalite, selected_from_menu = onbellek anahtari
+        quality, key = key, selected_from_menu
+        row = await db.cache_get_by_key(key)
+        if row is None:
+            await callback.answer(
+                "Bu içerik artık önbellekte yok. Linki tekrar gönderin.",
+                show_alert=True,
+            )
+            return
+        heights = _quality_heights(row)
+        preset = "audio" if quality == "mp3" else f"h:{quality}"
+        await _queue_with_status(
+            callback,
+            db=db,
+            settings=settings,
+            queue=queue,
+            preset=preset,
+            row=row,
+            heights=heights,
+            origin_message=callback.message,
+        )
+        return
 
     if action == "cancel":
         state = await queue.cancel(
@@ -1263,7 +1289,11 @@ async def on_action(
         heights = _quality_heights(row)
         with contextlib.suppress(TelegramBadRequest):
             await callback.message.edit_reply_markup(
-                reply_markup=quality_menu(row.get("preset") or "", heights)
+                reply_markup=quality_menu(
+                    row.get("preset") or "",
+                    heights,
+                    cache_key=key,
+                )
             )
         return
 
@@ -1281,21 +1311,6 @@ async def on_action(
                     in_group=callback.message.chat.id < 0,
                 )
             )
-        return
-
-    if action == "quality":
-        heights = _quality_heights(row)
-        preset = "audio" if key == "mp3" else f"h:{key}"
-        await _queue_with_status(
-            callback,
-            db=db,
-            settings=settings,
-            queue=queue,
-            preset=preset,
-            row=row,
-            heights=heights,
-            origin_message=callback.message,
-        )
         return
 
     if action in {"higher", "lower", "asdoc"}:

@@ -14,6 +14,7 @@ from bot.qol import (
     media_buttons,
     playlist_menu,
     playlist_summary,
+    quality_menu,
     retry_keyboard,
     video_codec_label,
     video_label,
@@ -144,6 +145,36 @@ class SmartErrorTests(unittest.TestCase):
     def test_hints_are_category_specific(self) -> None:
         self.assertIn("50 MB", error_hint(CATEGORY_SIZE, max_upload_mb=50))
         self.assertIn("dosya", error_hint(CATEGORY_ACCESS, max_upload_mb=50))
+
+    def test_generic_download_error_has_no_document_button(self) -> None:
+        """Indirme hatasinda dosya yok; "dosya olarak gonder" onerilmemeli."""
+        keyboard = retry_keyboard(
+            "job1",
+            preset="h:720",
+            has_lower=False,
+            source_url=None,
+            max_upload_mb=50,
+            category="generic",
+        )
+        callbacks = [b.callback_data for b in _buttons(keyboard)]
+        self.assertNotIn("act|asdoc|job1", callbacks)
+        self.assertIn("retry|job1", callbacks)
+
+    def test_quality_menu_keeps_cache_key(self) -> None:
+        """Kalite butonlari medyanin onbellek anahtarini tasimali."""
+        cache_key = "a" * 32
+        menu = quality_menu("h:720", [1080, 720], cache_key=cache_key)
+        datas = [b.callback_data for b in _buttons(menu)]
+        self.assertIn(f"act|quality|1080|{cache_key}", datas)
+        self.assertIn(f"act|quality|mp3|{cache_key}", datas)
+        self.assertIn(f"act|qclose|{cache_key}", datas)
+        # Kalite butonlari: aksiyon|kalite|onbellek_anahtari
+        quality_datas = [d for d in datas if d.startswith("act|quality|")]
+        self.assertEqual(len(quality_datas), 3)
+        for data in quality_datas:
+            parts = data.split("|")
+            self.assertEqual(len(parts), 4)
+            self.assertEqual(parts[-1], cache_key)
 
 
 class PlaylistTests(unittest.TestCase):

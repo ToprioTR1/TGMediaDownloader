@@ -161,7 +161,9 @@ def retry_keyboard(
     if category == CATEGORY_SIZE:
         # Boyut hatasinda dosya olarak gondermek de limiti asar; bunu onermeyiz.
         can_document = False
-    if category in {CATEGORY_ACCESS, CATEGORY_GENERIC} and can_document:
+    if category == CATEGORY_ACCESS and can_document:
+        # "Dosya olarak gonder" yalnizca onbellekte karsiligi olan bir medya
+        # icin (asdoc) anlamlidir. Indirme hatasinda dosya henuz yoktur.
         rows.append(
             [
                 InlineKeyboardButton(
@@ -279,11 +281,15 @@ def media_buttons(
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
 
-def quality_menu(current_preset: str, heights: list[int] | None = None) -> InlineKeyboardMarkup:
+def quality_menu(
+    current_preset: str,
+    heights: list[int] | None = None,
+    cache_key: str | None = None,
+) -> InlineKeyboardMarkup:
     """Kalite secenekleri: mevcut kaliteler + MP3.
 
-    `heights` bossa 360/720/1080 gosterilir. Onbellekteki video icin gercek
-    kaliteler bilinmedigi icin 144–2160 araligindan makul bir liste kullanilir.
+    `heights` bossa 360/720/1080 gosterilir. `cache_key` verilirse butonlar
+    medyanin onbellek anahtarini tasir; boylece secim dogru kayda gider.
     """
     options = sorted({h for h in (heights or []) if h >= 144}, reverse=True)
     if not options:
@@ -296,7 +302,8 @@ def quality_menu(current_preset: str, heights: list[int] | None = None) -> Inlin
         mark = "✓ " if preset == current_preset else ""
         row.append(
             InlineKeyboardButton(
-                text=f"{mark}{height}p", callback_data=f"act|quality|{height}"
+                text=f"{mark}{height}p",
+                callback_data=f"act|quality|{height}|{cache_key or ''}",
             )
         )
         if len(row) == 3:
@@ -308,9 +315,13 @@ def quality_menu(current_preset: str, heights: list[int] | None = None) -> Inlin
     rows.append(
         [
             InlineKeyboardButton(
-                text=f"{audio_mark}🎵 MP3", callback_data="act|quality|mp3"
+                text=f"{audio_mark}🎵 MP3",
+                callback_data=f"act|quality|mp3|{cache_key or ''}",
             ),
-            InlineKeyboardButton(text="✖️ Kapat", callback_data="act|qclose|0"),
+            InlineKeyboardButton(
+                text="✖️ Kapat",
+                callback_data=f"act|qclose|{cache_key or '0'}",
+            ),
         ]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
