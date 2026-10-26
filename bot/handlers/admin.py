@@ -49,7 +49,8 @@ def _stats_text(stats: dict[str, Any], *, queue: JobQueue) -> str:
         f"❌ Hata: {stats['errors']}\n"
         f"💾 Toplam veri: {human_size(stats['bytes'])}\n"
         f"⚡️ Önbellek: {stats.get('cached', 0)} içerik\n"
-        f"🚦 Kuyruk: {queue.queued_count} bekleyen • {queue.active_count} aktif\n\n"
+        f"🚦 Kuyruk: {queue.queued_count} bekleyen • {queue.active_count} aktif"
+        f" • {queue.pending_total} iş\n\n"
         f"<b>Platform dağılımı</b>\n{platforms}"
     )
 

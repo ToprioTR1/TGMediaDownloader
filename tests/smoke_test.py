@@ -1467,8 +1467,58 @@ async def main() -> int:
         await queue.forget_status(ADMIN.id, failed_status.message_id)
         print("28) akilli hata butonlari OK")
 
+        # 29) kuyruk sirasi (izole sohbet: ana kuyrugun iscileriyle yarismasin)
+        q4_chat = 990042
+        q4 = JobQueue(
+            bot,
+            db,
+            settings,
+            downloader,
+            gallery,
+            status_min_interval=0.01,
+            status_progress_interval=0.05,
+            status_retry_backoff=0.01,
+        )
+        job_a_status = await q4.send_status(q4_chat, "sirada A")
+        job_b_status = await q4.send_status(q4_chat, "sirada B")
+        job_a = Job(
+            id="qpos1",
+            user_id=q4_chat,
+            chat_id=q4_chat,
+            status_message_id=job_a_status.message_id,
+            url="https://example.com/q1",
+            preset="h:720",
+            title="A",
+            platform="YouTube",
+        )
+        job_b = Job(
+            id="qpos2",
+            user_id=q4_chat,
+            chat_id=q4_chat,
+            status_message_id=job_b_status.message_id,
+            url="https://example.com/q2",
+            preset="h:720",
+            title="B",
+            platform="YouTube",
+        )
+        check(await q4.submit(job_a), "ilk kuyruk isi eklenemedi")
+        check(await q4.submit(job_b), "ikinci kuyruk isi eklenemedi")
+        snapshot = q4.queue_snapshot()
+        check(snapshot["queued"] == 2, f"kuyruk ozeti yanlis: {snapshot}")
+        check(q4.queue_position(job_a) == 1, "ilk isin sirasi 1 degil")
+        check(q4.queue_position(job_b) == 2, "ikinci isin sirasi 2 degil")
+        await q4._status._cards[(q4_chat, job_b.status_message_id)].flush()
+        first_text = bot.texts.get(job_a.status_message_id, "")
+        second_text = bot.texts.get(job_b.status_message_id, "")
+        check("Sıra: <b>1</b>" in first_text, f"ilk sira metni yok: {first_text!r}")
+        check(
+            "Sıra: <b>2</b>/2" in second_text,
+            f"ikinci sira metni yok: {second_text!r}",
+        )
+        print("29) kuyruk bilgisi OK")
+
         stats = await db.stats()
-        print("29) istatistikler:", stats)
+        print("30) istatistikler:", stats)
     except AssertionError as exc:
         print("HATA:", exc)
         return 1

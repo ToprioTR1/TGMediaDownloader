@@ -30,6 +30,7 @@ ile yazıldı, Docker ile çalışacak şekilde hazırlandı.
   mümkün olduğunda yeniden indirmeden `file_id` önbelleğinden çalışır
 - 🧠 Akıllı hatalar: hataya göre yeniden dene, daha düşük kalite, dosya olarak
   gönder veya kaynağı aç butonu ve tek satırlık bir öneri
+- 🕒 Kuyruk sırası (`🕒 2/3`): bekleyen indirmenin sırasını gösterir
 - 📝 Medya açıklamasındaki (caption) ve yanıtlanan mesajdaki bağlantılar da işlenir
 - 🚦 Yalnızca yt-dlp site eşleştiricisinin tanıdığı URL'ler (veya sitelerin
   resmi kısa link alan adları) işlenir; normal web sayfaları ağ isteği
@@ -429,7 +430,7 @@ python -m unittest tests.test_instagram_embed -v    # Instagram embed ayrıştı
 python -m unittest tests.test_media -v              # ffprobe/önizleme testleri (ffmpeg gerekir)
 python -m unittest tests.test_retry -v              # tek otomatik tekrar testleri
 python -m unittest tests.test_database_migration -v # eski önbellek taşıma testleri
-python -m unittest tests.test_qol -v                # aksiyon butonları ve akıllı hatalar
+python -m unittest tests.test_qol -v                # aksiyon butonları, akıllı hatalar ve kuyruk
 ```
 
 Duman testi kendi verisini `.tmp/` altında oluşturur ve Telegram'a gerçek istek
@@ -473,6 +474,8 @@ kullanır ve ağ isteği yapmaz.
   kez otomatik tekrar denenir. İkinci hata normal hata mesajını ve manuel
   `Yeniden dene` butonunu gösterir. Desteklenmeyen linkler yine sessizce yok
   sayılır ve tekrar denenmez.
+- Kuyruk sırası, işçi bekleyen işlerden hesaplanır; iş beklerken `🕒 2/3`
+  görünür, başlayınca ilerleme satırına döner.
 - Medya yüklemeleri `UPLOAD_TIMEOUT_SEC` kullanır (varsayılan 600 saniye).
   Telegram zamanında yanıt vermezse bot dosyayı otomatik olarak **tekrar
   göndermez**; çünkü dosya çoktan ulaşmış olabilir ve tekrar deneme kopya

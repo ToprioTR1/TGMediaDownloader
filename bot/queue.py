@@ -340,7 +340,7 @@ class JobQueue:
         await self._status.edit(
             job.chat_id,
             job.status_message_id,
-            render_job_status(job.status_header, "queued"),
+            self._queue_text(job, render_job_status(job.status_header, "queued")),
         )
         return True
 
@@ -1060,14 +1060,56 @@ class JobQueue:
         if job.status_stage == "error" and stage != "error":
             return
         job.status_stage = stage
+        if stage == "queued":
+            text = self._queue_text(
+                job, render_job_status(job.status_header, stage, detail)
+            )
+        else:
+            text = render_job_status(job.status_header, stage, detail)
         await self._status.edit(
             job.chat_id,
             job.status_message_id,
-            render_job_status(job.status_header, stage, detail),
+            text,
         )
 
     def _targets(self, job: Job) -> list[tuple[int, int]]:
         return [(job.chat_id, job.status_message_id)]
+
+    def _queue_text(self, job: Job, text: str) -> str:
+        """Kuyruk sirasini ve toplam is sayisini durum metnine ekler."""
+        position = self.queue_position(job)
+        total = self._pending.get(job.user_id, 0)
+        if not position:
+            return text
+        if total > 1:
+            return f"{text}\n\n🕒 Sıra: <b>{position}</b>/{total}"
+        return f"{text}\n\n🕒 Sıra: <b>{position}</b>"
+
+    def queue_position(self, job: Job) -> int | None:
+        """Kullanicinin bekleyen isleri arasinda 1 tabanli sira."""
+        if job.status_stage != "queued":
+            return None
+        position = 1
+        for item in list(self._queue._queue):  # asyncio.Queue ic icerigi
+            if item.user_id != job.user_id:
+                continue
+            if item is job:
+                return position
+            position += 1
+        return None
+
+    def queue_snapshot(self) -> dict[str, int]:
+        """Admin paneli icin kuyruk ozeti."""
+        return {
+            "queued": self.queued_count,
+            "active": self.active_count,
+            "users": len(self._pending),
+            "jobs": self.pending_total,
+        }
+
+    @property
+    def pending_total(self) -> int:
+        return sum(self._pending.values())
 
     def _retry_keyboard(self, job: Job) -> InlineKeyboardMarkup:
         return retry_keyboard(
