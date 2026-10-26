@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS media_cache (
     width       INTEGER,
     height      INTEGER,
     duration    INTEGER,
+    cover_file_id TEXT,
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -129,6 +130,7 @@ class Database:
                 "width": "INTEGER",
                 "height": "INTEGER",
                 "duration": "INTEGER",
+                "cover_file_id": "TEXT",
             },
         )
         await self._add_columns(
@@ -397,23 +399,25 @@ class Database:
         width: int | None = None,
         height: int | None = None,
         duration: int | None = None,
+        cover_file_id: str | None = None,
     ) -> None:
         async with self._write_lock:
             await self.conn.execute(
                 """
                 INSERT INTO media_cache
                     (cache_key, url, preset, file_id, media_type, title, platform,
-                     filesize, width, height, duration)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     filesize, width, height, duration, cover_file_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(cache_key) DO UPDATE SET
-                    file_id    = excluded.file_id,
-                    title      = excluded.title,
-                    platform   = excluded.platform,
-                    filesize   = excluded.filesize,
-                    width      = excluded.width,
-                    height     = excluded.height,
-                    duration   = excluded.duration,
-                    created_at = datetime('now')
+                    file_id       = excluded.file_id,
+                    title         = excluded.title,
+                    platform      = excluded.platform,
+                    filesize      = excluded.filesize,
+                    width         = excluded.width,
+                    height        = excluded.height,
+                    duration      = excluded.duration,
+                    cover_file_id = COALESCE(excluded.cover_file_id, media_cache.cover_file_id),
+                    created_at    = datetime('now')
                 """,
                 (
                     cache_key,
@@ -427,6 +431,7 @@ class Database:
                     width,
                     height,
                     duration,
+                    cover_file_id,
                 ),
             )
             await self.conn.commit()

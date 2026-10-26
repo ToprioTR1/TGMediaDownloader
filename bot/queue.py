@@ -88,6 +88,8 @@ class Job:
     video_codec: str = "auto"
     heights: list[int] = field(default_factory=list)
     error_text: str = ""
+    # Kalite degisiminde eski medya mesajini basarili gonderimden sonra sil.
+    delete_after_send: tuple[int, int] | None = None
     # Oynatma listesi alt isi: ust is kimligi ve sira bilgisi.
     parent_id: str | None = None
     playlist_index: int = 0
@@ -121,6 +123,7 @@ class Job:
             "video_codec": self.video_codec,
             "heights": list(self.heights),
             "error_text": self.error_text,
+            "delete_after_send": self.delete_after_send,
             "parent_id": self.parent_id,
             "playlist_index": self.playlist_index,
             "playlist_total": self.playlist_total,
@@ -172,6 +175,7 @@ class JobQueue:
         self._cancel_events: dict[str, asyncio.Event] = {}
         self._cancel_author: dict[str, tuple[int, int]] = {}
         self._tmpdirs: set[Path] = set()
+        self._last_cover_file_id: str | None = None
         self._janitor: asyncio.Task[None] | None = None
         self._active = 0
 
@@ -583,6 +587,7 @@ class JobQueue:
                         job.video_width,
                         job.video_height,
                         job.video_duration,
+                        self._last_cover_file_id,
                     )
                 except Exception:  # noqa: BLE001 - onbellek hatasi gonderimi bozmasin
                     log.exception("Onbellek yazilamadi: %s", job.id)
@@ -985,6 +990,7 @@ class JobQueue:
 
         cached_file_id: str | None = None
         cached_media_type = "video"
+        cached_cover_id: str | None = None
         for index, (chat_id, _) in enumerate(self._targets(job)):
             file = FSInputFile(path, filename=path.name)
             msg, media_type = await self._send_file(
@@ -999,6 +1005,8 @@ class JobQueue:
             if index == 0:
                 cached_file_id = _file_id(msg, media_type)
                 cached_media_type = media_type
+                cached_cover_id = _cover_file_id(msg)
+        self._last_cover_file_id = cached_cover_id
         return cached_file_id, cached_media_type
 
     async def _inspect_video(self, path: Path) -> VideoMeta | None:
@@ -1297,6 +1305,21 @@ class JobQueue:
             await self._delete(job)
         except Exception:  # noqa: BLE001 - gonderim zaten basarili
             log.exception("Basarili gonderim sonrasi durum mesaji silinemedi: %s", job.id)
+        # Kalite degisiminde eski medya mesaji kalsin istemiyoruz; silinemezse
+        # yeni medya yine de gonderilmis olur.
+        if job.delete_after_send is not None:
+            chat_id, message_id = job.delete_after_send
+            try:
+                await self._bot.delete_message(
+                    chat_id=chat_id, message_id=message_id
+                )
+            except Exception as exc:  # noqa: BLE001 - eski mesaj zaten gitmis olabilir
+                log.info(
+                    "Eski medya mesaji silinemedi (%s/%s): %s",
+                    chat_id,
+                    message_id,
+                    exc,
+                )
 
     async def _fail(self, job: Job, text: str) -> None:
         job.error_text = text
@@ -1397,3 +1420,14 @@ def cached_video_kwargs(
 def _file_id(message: Message, kind: str) -> str | None:
     media = getattr(message, kind, None)
     return getattr(media, "file_id", None)
+
+
+def _cover_file_id(message: Message) -> str | None:
+    """Gonderilen mesajdaki video/animasyon onizlemesinin dosya kimligi."""
+    for kind in ("video", "animation", "document", "audio"):
+        media = getattr(message, kind, None)
+        thumb = getattr(media, "thumbnail", None) if media is not None else None
+        file_id = getattr(thumb, "file_id", None)
+        if file_id:
+            return file_id
+    return None

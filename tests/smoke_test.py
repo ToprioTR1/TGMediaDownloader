@@ -161,6 +161,13 @@ class FakeBot:
                 width=1920,
                 height=1080,
                 duration=10,
+                # Gercek Telegram gibi onizleme dondur.
+                thumbnail=PhotoSize(
+                    file_id=f"thumb_{self.message_id + 1}",
+                    file_unique_id=f"uthumb_{self.message_id + 1}",
+                    width=320,
+                    height=180,
+                ),
             ),
         )
 
@@ -1449,6 +1456,12 @@ async def main() -> int:
                     width=1080,
                     height=1920,
                     duration=24,
+                    thumbnail=PhotoSize(
+                        file_id="thumb_file",
+                        file_unique_id="uthumb_file",
+                        width=320,
+                        height=180,
+                    ),
                 )
             }
         ).as_(bot)
@@ -1494,7 +1507,37 @@ async def main() -> int:
             "kalite secimi yeni indirme baslatmadi",
         )
         await asyncio.wait_for(queue._queue.join(), timeout=180)
+        # Kalite degisince eski medya mesaji silinmeli.
+        check(
+            any(
+                c[0] == "delete_message"
+                and c[1].get("message_id") == video_msg.message_id
+                for c in bot.calls
+            ),
+            "kalite degisiminde eski medya mesaji silinmedi",
+        )
         print("27b) kalite menusu OK")
+
+        # 27c) kapak fotoğrafı butonu çalışmalı
+        cover_mark = len(bot.calls)
+        await dp.feed_update(bot, callback_update(f"act|cover|{q_key}", video_msg))
+        cover_photos = [
+            c for c in bot.calls[cover_mark:] if c[0] == "send_photo"
+        ]
+        cover_answers = [
+            (c[1].get("text") or "")
+            for c in bot.calls[cover_mark:]
+            if c[0] == "answer_callback_query"
+        ]
+        check(
+            bool(cover_photos),
+            f"kapak fotoğrafı gönderilmedi, yanıt: {cover_answers}",
+        )
+        check(
+            not any("kapak görseli yok" in a for a in cover_answers),
+            f"kapak butonu 'yok' dedi: {cover_answers}",
+        )
+        print("27c) kapak fotoğrafı OK")
 
         # 28) akilli hata butonlari: boyut hatasi + daha dusuk kalite
         failed = Job(
