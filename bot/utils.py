@@ -112,6 +112,20 @@ def _blocked_ip(value: str) -> bool:
     return not is_public_ip(value)
 
 
+def is_instagram_url(url: str) -> bool:
+    """Instagram (ve resmi instagr.am kisa linkleri) mi?"""
+    try:
+        host = (urlparse(url).hostname or "").lower().rstrip(".")
+    except ValueError:
+        return False
+    return (
+        host == "instagram.com"
+        or host.endswith(".instagram.com")
+        or host == "instagr.am"
+        or host.endswith(".instagr.am")
+    )
+
+
 def is_blocked_host(url: str) -> bool:
     """Yerel ag / localhost adreslerine istek atilmasini engeller."""
     try:

@@ -64,7 +64,7 @@ Built with Python 3.12 + [aiogram 3](https://github.com/aiogram/aiogram) +
 - 🛠 Admin panel: `/stats`, `/users`, `/cache`, `/broadcast`
 - 📣 Broadcast reaches registered users **and groups** where the bot is present
 - 🧹 Bot-owned temporary downloads (`dl-*`) are cleaned periodically and on graceful shutdown
-- 🍪 `cookies.txt` support for Instagram/TikTok
+- 🍪 `cookies.txt` support for Instagram only (other platforms are unaffected)
 - 🔄 Automatic yt-dlp + gallery-dl update on Docker startup (`AUTO_UPDATE_YTDLP=1`)
 - 🐳 ffmpeg comes preinstalled in the Docker image
 
@@ -180,7 +180,7 @@ All settings are read from `.env` ([bot/config.py](bot/config.py)):
 | `GALLERY_LIMIT` | `10` | Maximum media per post (Telegram album limit is 10) |
 | `MONTHLY_TRAFFIC_GB` | `0` | Monthly traffic quota in GB (0 = disabled) |
 | `AUTO_UPDATE_YTDLP` | `1` | Update yt-dlp + gallery-dl on Docker startup |
-| `COOKIES_FILE` | — | Path to `cookies.txt` (for sites that require cookies) |
+| `COOKIES_FILE` | - | Path to `cookies.txt` (used only for Instagram) |
 | `TELEGRAM_API_URL` | empty | Local Bot API server URL (its host is allowlisted automatically) |
 | `PROXY_URL` | empty | HTTP(S)/SOCKS proxy for downloads (not used unless `NETGUARD_ALLOW_PROXY=1`) |
 | `NETGUARD_ALLOW` | empty | Extra trusted `host:port` endpoints for the SSRF guard |
@@ -189,11 +189,12 @@ All settings are read from `.env` ([bot/config.py](bot/config.py)):
 | `DB_PATH` | `./data/bot.db` | SQLite database |
 | `LOG_LEVEL` | `INFO` | Log level |
 
-## Cookies for Instagram / TikTok / Pinterest
+## Instagram cookies
 
-When Instagram (and sometimes TikTok, Pinterest or YouTube) asks for a login, the bot says
-"This content requires a login". The fix is to export a cookie file from your
-browser.
+Instagram sometimes asks for a login. The bot says "This content requires a
+login". The fix is to export a cookie file from your browser. This file is used
+**only for Instagram**; YouTube, TikTok, Pinterest and other platforms are
+downloaded without it.
 
 1. Install the **"Get cookies.txt LOCALLY"** extension (Chrome/Firefox).
 2. Log in to Instagram → extension → **Export as Netscape** for `instagram.com`.

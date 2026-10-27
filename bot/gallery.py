@@ -24,6 +24,7 @@ from .instagram_embed import (
     fetch_items as fetch_instagram_embed,
     instagram_shortcode,
 )
+from .utils import is_instagram_url
 
 log = logging.getLogger(__name__)
 
@@ -65,13 +66,16 @@ class GalleryDownloader:
             return [executable]
         return [sys.executable, "-m", "gallery_dl"]
 
-    def _common_args(self) -> list[str]:
+    def _common_args(self, url: str | None = None) -> list[str]:
         # Kullanıcı/ortam yapılandırmasının harici indirici veya --exec gibi
         # ağ kancasını atlayan seçenekler eklemesini engelle.
         args: list[str] = ["--config-ignore"]
-        cookies = self._settings.cookies_file
-        if cookies and cookies.exists():
-            args += ["--cookies", str(cookies)]
+        # Cerezler yalnizca Instagram icin kullanilir; diger platformlarda
+        # kullanici hesabinin cerezleri istenmeyen yan etkiler yaratabilir.
+        if url and is_instagram_url(url):
+            cookies = self._settings.cookies_file
+            if cookies and cookies.exists():
+                args += ["--cookies", str(cookies)]
         if netguard.proxy_allowed():
             if self._settings.proxy:
                 args += ["--proxy", self._settings.proxy]
@@ -148,7 +152,7 @@ class GalleryDownloader:
             "--dump-json",
             "--range",
             f"1-{self._settings.gallery_limit}",
-            *self._common_args(),
+            *self._common_args(url),
             url,
         ]
         proc = self._run(cmd, timeout=60)
@@ -182,7 +186,7 @@ class GalleryDownloader:
             str(outdir),
             "--range",
             f"1-{self._settings.gallery_limit}",
-            *self._common_args(),
+            *self._common_args(url),
             url,
         ]
         try:
@@ -222,7 +226,8 @@ class GalleryDownloader:
             hint = detail[-1][:200] if detail else "bilinmeyen hata"
             if "login" in hint.lower() or "cookie" in hint.lower():
                 raise GalleryError(
-                    "Bu gönderi için giriş gerekiyor. Bot sahibinin cookies.txt eklemesi lazım."
+                    "Bu gönderi için giriş gerekiyor. Instagram ise bot sahibinin "
+                    "cookies.txt eklemesi lazım."
                 )
             raise GalleryError(f"Gönderi indirilemedi: {hint}")
         raise GalleryError("Gönderi indirilemedi: medya bulunamadı")

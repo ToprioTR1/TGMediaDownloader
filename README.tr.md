@@ -59,7 +59,7 @@ ile yazıldı, Docker ile çalışacak şekilde hazırlandı.
 - 🛠 Admin paneli: `/stats`, `/users`, `/cache`, `/broadcast`
 - 📣 Duyuru, kayıtlı kullanıcılara **ve botun bulunduğu gruplara** gönderilir
 - 🧹 Botun oluşturduğu geçici dosyalar (`dl-*`) periyodik olarak ve kapanışta temizlenir
-- 🍪 Instagram/TikTok için `cookies.txt` desteği
+- 🍪 Yalnızca Instagram için `cookies.txt` desteği (diğer platformlar etkilenmez)
 - 🔄 Docker açılışında yt-dlp + gallery-dl otomatik güncelleme (`AUTO_UPDATE_YTDLP=1`)
 - 🐳 Docker imajında ffmpeg hazır gelir
 
@@ -174,7 +174,7 @@ Tüm ayarlar `.env` üzerinden okunur ([bot/config.py](bot/config.py)):
 | `GALLERY_LIMIT` | `10` | Gönderi başına en fazla medya (Telegram albüm limiti 10) |
 | `MONTHLY_TRAFFIC_GB` | `0` | Aylık trafik kotası, GB (0 = kapalı) |
 | `AUTO_UPDATE_YTDLP` | `1` | Docker açılışında yt-dlp + gallery-dl güncelle |
-| `COOKIES_FILE` | — | `cookies.txt` yolu (çerez gereken siteler için) |
+| `COOKIES_FILE` | - | `cookies.txt` yolu (yalnızca Instagram için kullanılır) |
 | `TELEGRAM_API_URL` | boş | Yerel Bot API sunucusu adresi (host'u otomatik izin listesine eklenir) |
 | `PROXY_URL` | boş | İndirmeler için HTTP(S)/SOCKS proxy (`NETGUARD_ALLOW_PROXY=1` olmadan kullanılmaz) |
 | `NETGUARD_ALLOW` | boş | SSRF korumasında ek izin verilecek güvenilir `host:port` uçları |
@@ -183,10 +183,11 @@ Tüm ayarlar `.env` üzerinden okunur ([bot/config.py](bot/config.py)):
 | `DB_PATH` | `./data/bot.db` | SQLite veritabanı |
 | `LOG_LEVEL` | `INFO` | Log seviyesi |
 
-## Instagram / TikTok için Çerezler
+## Instagram çerezleri
 
-Instagram (ve bazen TikTok, YouTube) giriş istediğinde bot "Bu içerik için
-giriş gerekiyor" der. Çözüm: tarayıcıdan çerez dosyası çıkarmak.
+Instagram bazen giriş ister. Bot "Bu içerik için giriş gerekiyor" der. Çözüm:
+tarayıcıdan çerez dosyası çıkarmak. Bu dosya **yalnızca Instagram** için
+kullanılır; YouTube, TikTok, Pinterest ve diğer platformlar çerezsiz indirilir.
 
 1. Tarayıcıya **"Get cookies.txt LOCALLY"** (Chrome/Firefox) eklentisini kur.
 2. Instagram'a giriş yap → eklenti → `instagram.com` için **Export as Netscape**.

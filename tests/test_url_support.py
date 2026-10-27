@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,7 +23,12 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from bot.downloader import DownloadError, MediaInfo, ytdlp_supports_url  # noqa: E402
+from bot.downloader import (  # noqa: E402
+    DownloadError,
+    Downloader,
+    MediaInfo,
+    ytdlp_supports_url,
+)
 from bot.gallery import GalleryDownloader, GalleryError, _queued_urls  # noqa: E402
 from bot.handlers.download import (  # noqa: E402
     _gallery_platform,
@@ -36,7 +42,7 @@ from bot.handlers.download import (  # noqa: E402
     _tiktok_photo_url,
     on_text,
 )
-from bot.utils import UNSUPPORTED_URL_TEXT  # noqa: E402
+from bot.utils import UNSUPPORTED_URL_TEXT, is_instagram_url  # noqa: E402
 
 TIKTOK_PHOTO_URL = (
     "https://www.tiktok.com/@fukumean_777/photo/7699870291001920788"
@@ -191,7 +197,7 @@ class _QueueFollowingGallery(GalleryDownloader):
     def _base_cmd(self) -> list[str]:
         return []
 
-    def _common_args(self) -> list[str]:
+    def _common_args(self, url: str | None = None) -> list[str]:
         return []
 
     def _run(self, cmd, timeout):
@@ -402,6 +408,52 @@ class UnsupportedUrlHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(queue.edited, [])
         self.assertEqual(queue.deleted, [(123, 77)])
         self.assertEqual(queue.forgotten, [(123, 77)])
+
+
+class CookieScopeTests(unittest.TestCase):
+    def test_instagram_url_detection(self) -> None:
+        for url in (
+            "https://www.instagram.com/p/abc/",
+            "https://instagram.com/reel/abc/",
+            "https://instagr.am/p/abc/",
+        ):
+            self.assertTrue(is_instagram_url(url), url)
+        for url in (
+            "https://www.tiktok.com/@x/video/1",
+            "https://www.youtube.com/watch?v=x",
+            "https://instagram.com.evil.example/p/abc/",
+        ):
+            self.assertFalse(is_instagram_url(url), url)
+
+    def test_ytdlp_cookies_only_for_instagram(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cookies-") as raw:
+            cookies = Path(raw) / "cookies.txt"
+            cookies.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+            downloader = object.__new__(Downloader)
+            downloader._settings = SimpleNamespace(  # type: ignore[attr-defined]
+                cookies_file=cookies, proxy=None
+            )
+            instagram = downloader._base_opts("https://www.instagram.com/p/abc/")
+            youtube = downloader._base_opts("https://www.youtube.com/watch?v=x")
+            self.assertEqual(instagram.get("cookiefile"), str(cookies))
+            self.assertNotIn("cookiefile", youtube)
+            self.assertNotIn("cookiefile", downloader._base_opts())
+
+    def test_gallery_cookies_only_for_instagram(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cookies-") as raw:
+            cookies = Path(raw) / "cookies.txt"
+            cookies.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+            gallery = object.__new__(GalleryDownloader)
+            gallery._settings = SimpleNamespace(  # type: ignore[attr-defined]
+                cookies_file=cookies, proxy=None
+            )
+            instagram = gallery._common_args("https://www.instagram.com/p/abc/")
+            tiktok = gallery._common_args("https://www.tiktok.com/@x/photo/1")
+            pinterest = gallery._common_args("https://www.pinterest.com/pin/1/")
+            self.assertIn("--cookies", instagram)
+            self.assertIn(str(cookies), instagram)
+            self.assertNotIn("--cookies", tiktok)
+            self.assertNotIn("--cookies", pinterest)
 
 
 class InstagramFallbackTests(unittest.IsolatedAsyncioTestCase):

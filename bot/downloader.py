@@ -20,7 +20,7 @@ from yt_dlp.extractor import gen_extractors
 
 from . import netguard
 from .config import Settings
-from .utils import UNSUPPORTED_URL_TEXT, platform_name
+from .utils import UNSUPPORTED_URL_TEXT, is_instagram_url, platform_name
 
 log = logging.getLogger(__name__)
 
@@ -65,8 +65,8 @@ def _friendly_error(raw: str) -> str:
         return "Bu hedef güvenlik politikası nedeniyle engellendi."
     if any(k in text for k in ("login", "sign in", "cookies", "authentication", "private")):
         return (
-            "Bu içerik için giriş gerekiyor. Instagram/TikTok gibi platformlarda "
-            "genelde hesap çerezi (cookies.txt) gerekir. Bot sahibine bildirin."
+            "Bu içerik için giriş gerekiyor. Instagram'da genelde hesap çerezi "
+            "(cookies.txt) gerekir. Bot sahibine bildirin."
         )
     if "unsupported url" in text:
         return UNSUPPORTED_URL_TEXT
@@ -169,7 +169,7 @@ class Downloader:
 
     # ------------------------------------------------------------------ ortak
 
-    def _base_opts(self) -> dict[str, Any]:
+    def _base_opts(self, url: str | None = None) -> dict[str, Any]:
         opts: dict[str, Any] = {
             "quiet": True,
             "no_warnings": True,
@@ -189,10 +189,14 @@ class Downloader:
             "windowsfilenames": True,
             "cachedir": False,
         }
-        if self._settings.cookies_file and self._settings.cookies_file.exists():
-            opts["cookiefile"] = str(self._settings.cookies_file)
-        elif self._settings.cookies_file:
-            log.warning("COOKIES_FILE bulunamadi: %s", self._settings.cookies_file)
+        # Cerezler yalnizca Instagram icin kullanilir; diger platformlarda
+        # kullanici hesabinin cerezleri istenmeyen yan etkiler yaratabilir.
+        if url and is_instagram_url(url):
+            cookies = self._settings.cookies_file
+            if cookies and cookies.exists():
+                opts["cookiefile"] = str(cookies)
+            elif cookies:
+                log.warning("COOKIES_FILE bulunamadi: %s", cookies)
         if netguard.proxy_allowed():
             if self._settings.proxy:
                 opts["proxy"] = self._settings.proxy
@@ -229,7 +233,7 @@ class Downloader:
         return self._media_info(url, info, check_duration=True)
 
     def _extract_info(self, url: str) -> dict[str, Any]:
-        opts = self._base_opts()
+        opts = self._base_opts(url)
         opts.update({"skip_download": True, "format": "bv*+ba/b"})
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
@@ -427,7 +431,7 @@ class Downloader:
                 state["speed"] = None
                 state["eta"] = 0
 
-        opts = self._base_opts()
+        opts = self._base_opts(url)
         opts.update(
             {
                 "outtmpl": "%(title).70s-%(id)s.%(ext)s",
