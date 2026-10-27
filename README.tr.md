@@ -103,6 +103,10 @@ docker compose logs -f bot
 Logda `Bot calisiyor: @kullanici_adin (id=...)` görürsen hazır. Telegram'da
 `/start` yazıp test et.
 
+> Compose dosyası artık `DOWNLOAD_DIR`, `DB_PATH` ve `COOKIES_FILE` değerlerini
+> ezmiyor; bunları `.env` içinde ayarlayın. Örnek dosya, konteyner `./data`
+> klasörünü `/data` olarak bağladığı için `/data/...` yollarını kullanır.
+
 ### 5. Güncel tut
 
 yt-dlp platform değişikliklerine çok sık uyum sağlar. Docker imajı her açılışta

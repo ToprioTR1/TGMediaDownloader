@@ -7,9 +7,8 @@ services:
     env_file:
       - .env
     environment:
-      DOWNLOAD_DIR: /data/downloads
-      DB_PATH: /data/bot.db
-      COOKIES_FILE: /data/cookies.txt
+      # Uygulama yollari ve ayarlari .env'den gelir; burada ezmeyin.
+      # (DOWNLOAD_DIR, DB_PATH, COOKIES_FILE .env icinde tanimli.)
       TZ: Europe/Istanbul
     volumes:
       - ./data:/data

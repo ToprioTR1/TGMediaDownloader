@@ -108,6 +108,10 @@ docker compose logs -f bot
 If you see `Bot calisiyor: @your_username (id=...)` in the logs, it is ready.
 Send `/start` in Telegram to test it.
 
+> The Compose file no longer overrides `DOWNLOAD_DIR`, `DB_PATH` or
+> `COOKIES_FILE`; set them in `.env`. The example uses `/data/...` because the
+> container mounts `./data` at `/data`.
+
 ### 5. Keep it up to date
 
 yt-dlp adapts to platform changes very frequently. The Docker image updates
