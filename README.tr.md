@@ -475,7 +475,8 @@ kullanır ve ağ isteği yapmaz.
 - Telegram bir videoyu boyut dışı bir hatayla reddederse (genelde oynatılamayan
   VP9/AV1 kodeği), bot ffmpeg ile bir kez H.264/AAC'ye çevirip yeniden gönderir.
   ffmpeg yoksa, dönüşüm başarısızsa veya dönüşen dosya limiti aşarsa belge
-  olarak gönderilir.
+  olarak gönderilir. Bu belge fallback'i bilerek önbelleğe yazılmaz; sonraki
+  istekte dönüşüm yeniden denenir.
 - Videolar `dl-*` geçici klasöründe tutulur ve gönderimden sonra silinir;
   sunucuda birikmez. 6 saatten eski artık `dl-*` girdileri 30 dakikada bir çalışan
   temizlik göreviyle silinir; `DOWNLOAD_DIR` içindeki diğer dosyalara dokunulmaz.
@@ -512,13 +513,12 @@ kullanır ve ağ isteği yapmaz.
   Telegram'daki en-boy oranını korur. ffprobe/ffmpeg yoksa bot eski davranışa
   döner.
 - Instagram fotoğraf/carousel, TikTok fotoğraf ve Pinterest pin gönderileri
-  gallery-dl ile indirilir; video içeren gönderilerde kalite seçimi için yt-dlp
-  kullanılır. Tek medyalı gönderiler (bir Pinterest pini, tek fotoğraflı
-  Instagram gönderisi) videolar gibi `file_id` önbelleğine yazılır; çoklu
-  carousel/panolar yeniden indirilir çünkü bir Telegram `file_id` tek öğeyi
-  kapsar. Instagram gallery-dl'yi giriş sayfasına yönlendirirse herkese açık
-  fotoğraf/carousel gönderileri embed sayfasından okunur; özel gönderiler için
-  yine `cookies.txt` gerekir.
+  gallery-dl ile indirilir. Pinterest video pinlerinde kalite seçimi için önce
+  yt-dlp denenir; görüntü pinleri gallery-dl'ye düşer. Tek medyalı gönderiler ve
+  çoklu albümler `file_id` önbelleğine yazılır ve yeniden indirilmeden gönderilir.
+  Instagram'da önce herkese açık embed sayfası denenir; medya yoksa ve
+  `cookies.txt` yoksa gallery-dl iki dakika beklenmeden atlanır ve bot çerez
+  gerektiğini söyler. Özel gönderiler için her zaman `cookies.txt` gerekir.
 - `file_id` önbelleği SQLite'ta tutulur (`CACHE_DAYS`, varsayılan 30 gün).
   Telegram dosyayı reddederse önbellek otomatik temizlenir ve yeniden indirilir.
   Eski kayıtlar açılışta budanır; adminler `/cache` ile önbelleği inceleyebilir,

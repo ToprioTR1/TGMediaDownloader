@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS media_cache (
     height      INTEGER,
     duration    INTEGER,
     cover_path  TEXT,
+    items       TEXT,
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -138,6 +139,7 @@ class Database:
                 "height": "INTEGER",
                 "duration": "INTEGER",
                 "cover_path": "TEXT",
+                "items": "TEXT",
             },
         )
         await self._add_columns(
@@ -507,16 +509,18 @@ class Database:
         height: int | None = None,
         duration: int | None = None,
         cover_path: str | None = None,
+        items: str | None = None,
     ) -> None:
         async with self._write_lock:
             await self.conn.execute(
                 """
                 INSERT INTO media_cache
                     (cache_key, url, preset, file_id, media_type, title, platform,
-                     filesize, width, height, duration, cover_path)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     filesize, width, height, duration, cover_path, items)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(cache_key) DO UPDATE SET
                     file_id    = excluded.file_id,
+                    media_type = excluded.media_type,
                     title      = excluded.title,
                     platform   = excluded.platform,
                     filesize   = excluded.filesize,
@@ -524,6 +528,7 @@ class Database:
                     height     = excluded.height,
                     duration   = excluded.duration,
                     cover_path = COALESCE(excluded.cover_path, media_cache.cover_path),
+                    items      = excluded.items,
                     created_at = datetime('now')
                 """,
                 (
@@ -539,6 +544,7 @@ class Database:
                     height,
                     duration,
                     cover_path,
+                    items,
                 ),
             )
             await self.conn.commit()

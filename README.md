@@ -485,7 +485,8 @@ make no network requests.
 - If Telegram rejects a video with a non-size error (typically an unplayable
   VP9/AV1 codec), the bot re-encodes it to H.264/AAC once with ffmpeg and resends
   it. If ffmpeg is unavailable, conversion fails, or the converted file exceeds
-  the limit, the file is sent as a document instead.
+  the limit, the file is sent as a document instead. That document fallback is
+  deliberately not cached, so a later request can try the conversion again.
 - Videos are kept in a `dl-*` temporary directory and deleted after sending; they
   do not accumulate on the server. Leftover `dl-*` entries older than 6 hours are
   removed by a janitor every 30 minutes; other files in `DOWNLOAD_DIR` are left
@@ -521,13 +522,13 @@ make no network requests.
   especially for files larger than about 10 MB. If ffprobe/ffmpeg is unavailable,
   the bot falls back to the previous behavior.
 - Instagram photo/carousel, TikTok photo and Pinterest pin posts are downloaded
-  with gallery-dl; for posts that contain video, yt-dlp is used for quality
-  selection. Single-media posts (a Pinterest pin, a one-photo Instagram post)
-  are stored in the `file_id` cache like videos; multi-item carousels/boards are
-  re-downloaded because a Telegram `file_id` covers one item. If Instagram
-  redirects gallery-dl to its login page, public photo/carousel posts are read
-  from the Instagram embed page instead; private posts still require
-  `cookies.txt`.
+  with gallery-dl. Pinterest video pins are probed with yt-dlp first so quality
+  selection still works; image pins fall back to gallery-dl. Single-media posts
+  and multi-item albums are stored in the `file_id` cache and replayed without
+  downloading again. For Instagram, the public embed page is tried first; if it
+  has no media and `cookies.txt` is absent, gallery-dl is skipped instead of
+  waiting for a two-minute timeout, and the bot explains that cookies are
+  required. Private posts always require `cookies.txt`.
 - The `file_id` cache is stored in SQLite (`CACHE_DAYS`, 30 days by default).
   If Telegram rejects a file, the cache entry is removed automatically and the
   media is downloaded again. Old entries are pruned at startup, and admins can

@@ -563,7 +563,7 @@ class VideoConversionTests(unittest.IsolatedAsyncioTestCase):
             _msg, kind = await queue._send_file(
                 job, FSInputFile(path), 42, None, None, False
             )
-            self.assertEqual(kind, "document")
+            self.assertEqual(kind, "document_fallback")
             self.assertEqual(bot.documents, 1)
 
 
@@ -596,6 +596,8 @@ class _GalleryBot(_FakeBot):
         super().__init__()
         self.photos = 0
         self.cached_photos = 0
+        self.media_groups: list[list] = []
+        self.cached_media = 0
 
     async def send_photo(self, **kwargs):
         self.photos += 1
@@ -607,18 +609,41 @@ class _GalleryBot(_FakeBot):
             photo=[SimpleNamespace(file_id="photo_file_id")],
         )
 
+    async def send_media_group(self, **kwargs):
+        media = list(kwargs.get("media") or [])
+        self.media_groups.append(media)
+        messages = []
+        for index, item in enumerate(media, start=1):
+            media_value = getattr(item, "media", None)
+            if isinstance(media_value, str):
+                self.cached_media += 1
+                file_id = media_value
+            else:
+                file_id = f"album_photo_{index}"
+            messages.append(
+                SimpleNamespace(
+                    message_id=index,
+                    photo=[SimpleNamespace(file_id=file_id)],
+                )
+            )
+        return messages
+
 
 class _OnePhotoGallery:
     available = True
 
-    def __init__(self) -> None:
+    def __init__(self, count: int = 1) -> None:
         self.calls = 0
+        self.count = count
 
     def download(self, _url: str, outdir: Path) -> list[Path]:
         self.calls += 1
-        target = outdir / "pin.jpg"
-        target.write_bytes(b"jpeg")
-        return [target]
+        files: list[Path] = []
+        for index in range(1, self.count + 1):
+            target = outdir / f"pin_{index}.jpg"
+            target.write_bytes(b"jpeg")
+            files.append(target)
+        return files
 
 
 class GalleryCacheTests(unittest.IsolatedAsyncioTestCase):
@@ -682,6 +707,72 @@ class GalleryCacheTests(unittest.IsolatedAsyncioTestCase):
                 await queue._process_gallery(second)
                 self.assertEqual(gallery.calls, 1, "ikinci kez indirildi")
                 self.assertEqual(bot.cached_photos, 1, "onbellekten gonderilmedi")
+            finally:
+                await db.close()
+
+    async def test_multi_photo_album_is_cached(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="gcache-") as raw:
+            db = Database(Path(raw) / "bot.db")
+            await db.connect()
+            settings = SimpleNamespace(
+                concurrency=1,
+                download_dir=Path(raw),
+                max_queue_per_user=5,
+                daily_limit=0,
+                cache_days=30,
+                max_upload_bytes=50 * 1024 * 1024,
+                max_upload_mb=50,
+                upload_timeout_sec=30,
+                gallery_enabled=True,
+                playlist_limit=5,
+                playlist_max_total_sec=1800,
+                monthly_traffic_gb=0,
+                admin_ids=frozenset(),
+            )
+            bot = _GalleryBot()
+            gallery = _OnePhotoGallery(count=2)
+            queue = JobQueue(
+                bot, db, settings, SimpleNamespace(), gallery
+            )  # type: ignore[arg-type]
+            url = "https://www.instagram.com/p/album/"
+            try:
+                first = Job(
+                    id="a1",
+                    user_id=42,
+                    chat_id=42,
+                    status_message_id=1,
+                    url=url,
+                    preset="gallery",
+                    title="Album",
+                    platform="Instagram",
+                    kind="gallery",
+                    source_url=url,
+                )
+                await queue._process_gallery(first)
+                cached = await db.cache_get(url, "gallery", 30)
+                self.assertIsNotNone(cached)
+                assert cached is not None
+                self.assertEqual(cached["media_type"], "album")
+                import json
+
+                items = json.loads(cached["items"])
+                self.assertEqual(len(items), 2)
+
+                second = Job(
+                    id="a2",
+                    user_id=42,
+                    chat_id=42,
+                    status_message_id=2,
+                    url=url,
+                    preset="gallery",
+                    title="Album",
+                    platform="Instagram",
+                    kind="gallery",
+                    source_url=url,
+                )
+                await queue._process_gallery(second)
+                self.assertEqual(gallery.calls, 1, "album ikinci kez indirildi")
+                self.assertEqual(bot.cached_media, 2, "album onbellekten gelmedi")
             finally:
                 await db.close()
 

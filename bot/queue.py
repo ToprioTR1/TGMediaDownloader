@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import shutil
 import tempfile
@@ -543,6 +544,13 @@ class JobQueue:
             except Exception:  # noqa: BLE001 - onbellek temizligi indirmeyi durdurmasin
                 log.exception("Gecersiz onbellek kaydi silinemedi: %s", job.id)
             return False
+        except ValueError as exc:
+            log.info("Onbellek icerigi bozuk, yeniden indirilecek (%s): %s", job.id, exc)
+            try:
+                await self._db.cache_delete(cached["cache_key"])
+            except Exception:  # noqa: BLE001
+                log.exception("Bozuk onbellek kaydi silinemedi: %s", job.id)
+            return False
         size = int(cached["filesize"] or 0)
         await self._finish_success(job, size, preset=preset)
         log.info("Onbellekten gonderildi: %s (%s)", job.url, human_size(size))
@@ -621,7 +629,13 @@ class JobQueue:
                 job, "sending", f"📤 <b>Gönderiliyor…</b> ({human_size(size)})"
             )
             file_id, media_type = await self._send(job, path)
-            if file_id and self._settings.cache_days:
+            # Kodek nedeniyle belgeye dusen dosyayi onbellege yazma; sonraki
+            # istekte donusum yeniden denensin.
+            if (
+                file_id
+                and self._settings.cache_days
+                and media_type != "document_fallback"
+            ):
                 try:
                     await self._db.cache_put(
                         media_cache_key(job.url, job.cache_preset),
@@ -769,14 +783,14 @@ class JobQueue:
                 job, "sending", f"📤 <b>Gönderiliyor…</b> ({human_size(total)})"
             )
             self._last_cover_path = None
-            file_id, media_type = await self._send_gallery(job, files)
-            if file_id and self._settings.cache_days:
+            file_id, media_type, items = await self._send_gallery(job, files)
+            if (file_id or items) and self._settings.cache_days:
                 try:
                     await self._db.cache_put(
                         media_cache_key(job.url, job.cache_preset),
                         job.url,
                         job.cache_preset,
-                        file_id,
+                        file_id or items[0]["file_id"],
                         media_type,
                         job.title[:200],
                         job.platform,
@@ -785,6 +799,7 @@ class JobQueue:
                         job.video_height,
                         job.video_duration,
                         self._last_cover_path,
+                        json.dumps(items) if items else None,
                     )
                 except Exception:  # noqa: BLE001 - onbellek hatasi gonderimi bozmasin
                     log.exception("Galeri onbellegi yazilamadi: %s", job.id)
@@ -810,7 +825,9 @@ class JobQueue:
             await asyncio.to_thread(shutil.rmtree, tmpdir, True)
             self._tmpdirs.discard(tmpdir)
 
-    async def _send_gallery(self, job: Job, files: list[Path]) -> tuple[str | None, str]:
+    async def _send_gallery(
+        self, job: Job, files: list[Path]
+    ) -> tuple[str | None, str, list[dict[str, Any]]]:
         """Galeri medyasini gonderir; tek medyada onbellek icin file_id doner."""
         caption: str | None = None
         if job.show_caption:
@@ -851,8 +868,8 @@ class JobQueue:
                         reply_markup=group_keyboard,
                         request_timeout=self._settings.upload_timeout_sec,
                     )
-                    return _file_id(msg, "document"), "document"
-                return None, "document"
+                    return _file_id(msg, "document"), "document", []
+                return None, "document", []
 
             for chat_id, _ in self._targets(job):
                 documents: list[InputMediaDocument] = []
@@ -864,12 +881,13 @@ class JobQueue:
                             parse_mode=ParseMode.HTML,
                         )
                     )
-                await self._bot.send_media_group(
+                messages = await self._bot.send_media_group(
                     chat_id=chat_id,
                     media=documents,
                     request_timeout=self._settings.upload_timeout_sec,
                 )
-            return None, "album"
+                return None, "album", _album_items(messages)
+            return None, "album", []
 
         if len(files) == 1:
             path = files[0]
@@ -909,7 +927,7 @@ class JobQueue:
                         request_timeout=self._settings.upload_timeout_sec,
                         **video_kwargs,
                     )
-                    return _file_id(msg, "video"), "video"
+                    return _file_id(msg, "video"), "video", []
                 if path.suffix.lower() in VIDEO_EXT:
                     msg = await self._bot.send_video(
                         chat_id=chat_id,
@@ -919,7 +937,7 @@ class JobQueue:
                         supports_streaming=True,
                         request_timeout=self._settings.upload_timeout_sec,
                     )
-                    return _file_id(msg, "video"), "video"
+                    return _file_id(msg, "video"), "video", []
                 msg = await self._bot.send_photo(
                     chat_id=chat_id,
                     photo=file,
@@ -927,8 +945,8 @@ class JobQueue:
                     reply_markup=single_keyboard,
                     request_timeout=self._settings.upload_timeout_sec,
                 )
-                return _photo_file_id(msg), "photo"
-            return None, "photo"
+                return _photo_file_id(msg), "photo", []
+            return None, "photo", []
 
         for chat_id, _ in self._targets(job):
             media: list[InputMediaPhoto | InputMediaVideo] = []
@@ -965,12 +983,13 @@ class JobQueue:
                             media=file, caption=item_caption, parse_mode=ParseMode.HTML
                         )
                     )
-            await self._bot.send_media_group(
+            messages = await self._bot.send_media_group(
                 chat_id=chat_id,
                 media=media,
                 request_timeout=self._settings.upload_timeout_sec,
             )
-        return None, "album"
+            return None, "album", _album_items(messages)
+        return None, "album", []
 
     # ------------------------------------------------------------- gonderim
 
@@ -998,8 +1017,15 @@ class JobQueue:
         size = int(row["filesize"] or 0)
         caption = self._caption(job, size)
         if job.kind == "gallery":
-            # Galeri kayitlari icin kalite/ses aksiyonlari anlamsiz; sadece kaynak.
-            keyboard = gallery_keyboard(job.source_url)
+            # Galeri kayitlari icin kalite yok; ses/dosya/kapak anlamli.
+            keyboard = media_buttons(
+                source_url=job.source_url,
+                cache_key=row["cache_key"],
+                can_audio=media_type == "video",
+                can_document=media_type in {"video", "photo"},
+                can_thumbnail=media_type == "video",
+                can_quality=False,
+            )
         elif self._settings.cache_days:
             keyboard = self._media_keyboard(
                 job,
@@ -1036,6 +1062,8 @@ class JobQueue:
                     reply_markup=keyboard,
                     request_timeout=self._settings.upload_timeout_sec,
                 )
+            elif media_type == "album":
+                await self._send_cached_album(job, row)
             else:
                 await self._bot.send_video(
                     chat_id=chat_id,
@@ -1046,6 +1074,66 @@ class JobQueue:
                     request_timeout=self._settings.upload_timeout_sec,
                     **cached_video_kwargs(row, job.duration),
                 )
+
+    async def _send_cached_album(self, job: Job, row: dict[str, Any]) -> None:
+        """Onbellekteki albumu file_id'lerle yeniden gonderir."""
+        try:
+            items = json.loads(row.get("items") or "[]")
+        except json.JSONDecodeError as exc:
+            raise ValueError("album onbellegi bozuk") from exc
+        if not isinstance(items, list) or not items:
+            raise ValueError("album onbellegi bos")
+        caption = self._caption(job, int(row.get("filesize") or 0))
+        if caption and job.show_caption and job.source_url:
+            caption += f'\n<a href="{escape(job.source_url)}">🔗 Kaynak</a>'
+        media: list[InputMediaPhoto | InputMediaVideo | InputMediaDocument] = []
+        for index, item in enumerate(items[:10]):
+            if not isinstance(item, dict):
+                continue
+            file_id = item.get("file_id")
+            if not isinstance(file_id, str) or not file_id:
+                continue
+            item_caption = caption if index == 0 else None
+            kind = item.get("media_type")
+            if kind == "video":
+                video_kwargs = {
+                    key: item[key]
+                    for key in ("width", "height", "duration")
+                    if isinstance(item.get(key), int) and item[key] > 0
+                }
+                media.append(
+                    InputMediaVideo(
+                        media=file_id,
+                        caption=item_caption,
+                        parse_mode=ParseMode.HTML,
+                        supports_streaming=True,
+                        **video_kwargs,
+                    )
+                )
+            elif kind == "photo":
+                media.append(
+                    InputMediaPhoto(
+                        media=file_id,
+                        caption=item_caption,
+                        parse_mode=ParseMode.HTML,
+                    )
+                )
+            else:
+                media.append(
+                    InputMediaDocument(
+                        media=file_id,
+                        caption=item_caption,
+                        parse_mode=ParseMode.HTML,
+                    )
+                )
+        if not media:
+            raise ValueError("album onbelleginde gecerli medya yok")
+        for chat_id, _ in self._targets(job):
+            await self._bot.send_media_group(
+                chat_id=chat_id,
+                media=media,
+                request_timeout=self._settings.upload_timeout_sec,
+            )
 
     async def _send(self, job: Job, path: Path) -> tuple[str | None, str]:
         size = path.stat().st_size
@@ -1239,7 +1327,7 @@ class JobQueue:
                     reply_markup=keyboard,
                     request_timeout=self._settings.upload_timeout_sec,
                 )
-                return msg, "document"
+                return msg, "document_fallback"
         raise RuntimeError("Medya gönderilemedi.")
 
     def _caption(self, job: Job, size: int) -> str | None:
@@ -1608,6 +1696,42 @@ def _photo_file_id(message: Message) -> str | None:
     if not photos:
         return None
     return getattr(photos[-1], "file_id", None)
+
+
+def _album_items(messages: Any) -> list[dict[str, Any]]:
+    """Media group yanitlarindan onbellek icin dosya listesi cikarir."""
+    if messages is None:
+        return []
+    if not isinstance(messages, (list, tuple)):
+        messages = [messages]
+    items: list[dict[str, Any]] = []
+    for message in messages:
+        photo = getattr(message, "photo", None) or []
+        if photo:
+            file_id = getattr(photo[-1], "file_id", None)
+            if file_id:
+                items.append({"file_id": file_id, "media_type": "photo"})
+            continue
+        video = getattr(message, "video", None)
+        if video is not None:
+            file_id = getattr(video, "file_id", None)
+            if file_id:
+                items.append(
+                    {
+                        "file_id": file_id,
+                        "media_type": "video",
+                        "width": getattr(video, "width", None),
+                        "height": getattr(video, "height", None),
+                        "duration": getattr(video, "duration", None),
+                    }
+                )
+            continue
+        document = getattr(message, "document", None)
+        if document is not None:
+            file_id = getattr(document, "file_id", None)
+            if file_id:
+                items.append({"file_id": file_id, "media_type": "document"})
+    return items
 
 
 def _remove_orphan_covers(directory: Path, referenced: set[str]) -> int:
