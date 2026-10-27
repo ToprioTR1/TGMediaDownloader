@@ -39,6 +39,8 @@ from ..config import Settings
 from ..database import Database
 from ..downloader import DownloadError, Downloader, MediaInfo
 from ..gallery import GalleryDownloader
+from ..instagram_embed import instagram_shortcode
+from ..keyboards import gallery_keyboard
 from ..qol import (
     audio_label,
     media_buttons,
@@ -85,6 +87,12 @@ GALLERY_HOSTS = (
 TIKTOK_SHORT_HOSTS = {"vm.tiktok.com", "vt.tiktok.com"}
 
 PLAYLIST_FIRST = 3
+
+INSTAGRAM_HINT = (
+    "❌ Instagram gönderisi alınamadı.\n"
+    "Gönderi özel veya giriş gerektiriyor olabilir; sunucuya "
+    "<code>cookies.txt</code> eklenmesi gerekiyor."
+)
 
 
 class SizeLimitError(Exception):
@@ -322,6 +330,23 @@ async def _probe_gallery(
 ) -> list[dict] | None:
     if gallery is None or not gallery.available:
         return None
+    # Instagram'da gallery-dl genelde giris duvarina takiliyor ve zaman
+    # asimina kadar bekliyor. Herkese acik gonderiler icin once hizli embed
+    # yolunu dene; cerez yoksa gallery-dl'yi bekletmeden bitir.
+    if instagram_shortcode(url):
+        try:
+            embed_items = await asyncio.wait_for(
+                asyncio.to_thread(gallery.probe_embed, url), timeout=35
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            log.info("Instagram embed kesif hatasi (%s): %s", url, exc)
+            embed_items = []
+        if embed_items:
+            return embed_items
+        if not gallery.has_cookies:
+            return None
     for attempt in range(2):
         try:
             items = await asyncio.wait_for(
@@ -803,18 +828,12 @@ async def _process_text(
         info: MediaInfo | None = None
         gallery_items: list[dict] | None = None
         gallery_checked = False
-        gallery_prefetched = False
 
         # yt-dlp TikTok fotoğraf gönderilerini desteklemiyor; doğrudan
         # gallery-dl kullan. Kısa linkler önce yt-dlp ile denenir.
         if _tiktok_photo_url(url) and gallery.available:
             gallery_items = await _probe_gallery(gallery, url)
             gallery_checked = True
-        elif _pinterest_url(url) and gallery.available:
-            # Pinterest pinleri fotoğraf veya video olabilir. gallery-dl
-            # ikisini de indirir; bos donerse yt-dlp ile video denenir.
-            gallery_items = await _probe_gallery(gallery, url)
-            gallery_prefetched = True
 
         async def _retry_notice() -> None:
             await queue.edit_status(
@@ -842,7 +861,7 @@ async def _process_text(
             await queue.forget_status(chat_id, status.message_id)
             continue
         except DownloadError as exc:
-            if not gallery_checked and not gallery_prefetched and _gallery_url(url):
+            if not gallery_checked and _gallery_url(url):
                 gallery_items = await _probe_gallery(gallery, url)
             if not gallery_items:
                 if gallery_checked:
@@ -852,6 +871,18 @@ async def _process_text(
                         chat_id,
                         status.message_id,
                         "❌ Bu gönderideki fotoğraflar alınamadı.",
+                        keyboard=_remember_probe_failure(
+                            chat_id, user_id, status.message_id, text, url
+                        ),
+                        wait=True,
+                    )
+                    await queue.forget_status(chat_id, status.message_id)
+                    continue
+                if instagram_shortcode(url):
+                    await queue.edit_status(
+                        chat_id,
+                        status.message_id,
+                        INSTAGRAM_HINT,
                         keyboard=_remember_probe_failure(
                             chat_id, user_id, status.message_id, text, url
                         ),
@@ -892,10 +923,15 @@ async def _process_text(
         if info is not None and _needs_gallery(info):
             gallery_items = await _probe_gallery(gallery, url)
             if gallery_items is None:
+                message = (
+                    INSTAGRAM_HINT
+                    if instagram_shortcode(url)
+                    else "❌ Bu gönderide indirilebilir video bulunamadı."
+                )
                 await queue.edit_status(
                     chat_id,
                     status.message_id,
-                    "❌ Bu gönderide indirilebilir video bulunamadı.",
+                    message,
                     keyboard=_remember_probe_failure(
                         chat_id, user_id, status.message_id, text, url
                     ),
@@ -1117,6 +1153,19 @@ async def _resend_cached(bot: Bot, chat_id: int, row: dict, timeout: int) -> Non
         )
 
 
+async def _resend_cached_as_document(
+    bot: Bot, chat_id: int, row: dict, timeout: int
+) -> None:
+    caption = f"<b>{escape((row.get('title') or 'Medya')[:200])}</b>"
+    await bot.send_document(
+        chat_id=chat_id,
+        document=row["file_id"],
+        caption=caption,
+        reply_markup=gallery_keyboard(row.get("url")),
+        request_timeout=timeout,
+    )
+
+
 async def _send_cover(
     bot: Bot, chat_id: int, message: Message, row: dict, timeout: int
 ) -> bool:
@@ -1212,7 +1261,10 @@ async def _queue_with_status(
     )
     job.chat_id = chat_id
     job.show_caption = bool(user.get("show_caption", 1))
-    if as_document_override is not None:
+    if preset == "audio":
+        # Ses her zaman ses olarak gonderilir; varsayilan dosya modu ezmesin.
+        job.as_document = False
+    elif as_document_override is not None:
         job.as_document = as_document_override
     elif preset.endswith("|doc"):
         job.as_document = True
@@ -1384,15 +1436,29 @@ async def on_action(
 
     if action == "qclose":
         await callback.answer()
+        media_type = row.get("media_type")
+        gallery_row = (row.get("preset") or "") == "gallery"
         with contextlib.suppress(TelegramBadRequest):
             await callback.message.edit_reply_markup(
                 reply_markup=media_buttons(
                     source_url=row.get("url"),
                     cache_key=key,
-                    can_audio=row.get("media_type") != "audio",
-                    can_document=row.get("media_type") == "video",
-                    can_thumbnail=row.get("media_type") == "video",
-                    can_quality=row.get("media_type") != "audio",
+                    can_audio=(
+                        media_type == "video"
+                        if gallery_row
+                        else media_type != "audio"
+                    ),
+                    can_document=(
+                        media_type in {"video", "photo"}
+                        if gallery_row
+                        else media_type == "video"
+                    ),
+                    can_thumbnail=media_type == "video",
+                    can_quality=(
+                        False
+                        if gallery_row
+                        else media_type != "audio"
+                    ),
                 )
             )
         return
@@ -1401,6 +1467,43 @@ async def on_action(
         heights = _quality_heights(row)
         current = preset_height(row.get("preset") or "")
         if action == "asdoc":
+            if (row.get("preset") or "") == "gallery":
+                # Galeri kaydini yeniden indirmeden belge olarak gonder.
+                try:
+                    await _resend_cached_as_document(
+                        callback.bot,
+                        callback.message.chat.id,
+                        row,
+                        settings.upload_timeout_sec,
+                    )
+                except TelegramNetworkError as exc:
+                    log.warning("Galeri belgesi gonderilemedi: %s", exc)
+                    await callback.answer(
+                        "Gönderim yanıtı alınamadı. Dosya geldiyse işlem tamam.",
+                        show_alert=True,
+                    )
+                    return
+                except TelegramBadRequest as exc:
+                    log.info("Galeri onbellegi gecersiz (%s): %s", key, exc)
+                    await db.cache_delete(key)
+                    await callback.answer(
+                        "Önbellek geçersizleşti, linki tekrar gönderin.",
+                        show_alert=True,
+                    )
+                    return
+                try:
+                    await db.record_download(
+                        callback.from_user.id,
+                        row["url"],
+                        row.get("platform") or "",
+                        "gallery",
+                        "ok",
+                        int(row.get("filesize") or 0),
+                    )
+                except Exception:  # noqa: BLE001 - medya zaten gonderildi
+                    log.exception("Galeri belge gonderimi kaydedilemedi")
+                await callback.answer("Dosya olarak gönderildi 📄")
+                return
             new_preset = row.get("preset") or "best"
             new_preset += "|doc"
             override = True

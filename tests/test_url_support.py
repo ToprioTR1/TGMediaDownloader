@@ -23,13 +23,14 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from bot.downloader import DownloadError, MediaInfo, ytdlp_supports_url  # noqa: E402
-from bot.gallery import GalleryDownloader, _queued_urls  # noqa: E402
+from bot.gallery import GalleryDownloader, GalleryError, _queued_urls  # noqa: E402
 from bot.handlers.download import (  # noqa: E402
     _gallery_platform,
     _gallery_title,
     _gallery_url,
     _needs_gallery,
     _pinterest_url,
+    _probe_gallery,
     _process_text,
     _tiktok_photo_url,
     on_text,
@@ -384,8 +385,62 @@ class UnsupportedUrlHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(queue.forgotten, [(123, 77)])
 
 
+class InstagramFallbackTests(unittest.IsolatedAsyncioTestCase):
+    async def test_probe_timeout_still_tries_embed(self) -> None:
+        gallery = object.__new__(GalleryDownloader)
+        gallery._settings = SimpleNamespace(gallery_limit=10)
+        gallery.available = True
+        with (
+            patch.object(
+                gallery, "_probe", side_effect=GalleryError("zaman aşımı")
+            ),
+            patch(
+                "bot.gallery.fetch_instagram_embed",
+                return_value=[{"url": "https://cdn.example/1.jpg", "extension": "jpg"}],
+            ),
+        ):
+            items = gallery.probe("https://www.instagram.com/p/abc/")
+        self.assertEqual(len(items), 1)
+
+    async def test_without_cookies_skips_slow_gallery_probe(self) -> None:
+        gallery = _InstagramGallery(embed_items=[])
+        items = await _probe_gallery(
+            gallery, "https://www.instagram.com/p/abc/"  # type: ignore[arg-type]
+        )
+        self.assertIsNone(items)
+        self.assertEqual(gallery.embed_calls, ["https://www.instagram.com/p/abc/"])
+        self.assertEqual(gallery.probe_calls, [])
+
+    async def test_embed_items_are_used_without_gallery_probe(self) -> None:
+        item = {"url": "https://cdn.example/1.jpg", "extension": "jpg"}
+        gallery = _InstagramGallery(embed_items=[item])
+        items = await _probe_gallery(
+            gallery, "https://www.instagram.com/p/abc/"  # type: ignore[arg-type]
+        )
+        self.assertEqual(items, [item])
+        self.assertEqual(gallery.probe_calls, [])
+
+
+class _InstagramGallery:
+    available = True
+    has_cookies = False
+
+    def __init__(self, embed_items: list[dict]) -> None:
+        self.embed_items = embed_items
+        self.embed_calls: list[str] = []
+        self.probe_calls: list[str] = []
+
+    def probe_embed(self, url: str) -> list[dict]:
+        self.embed_calls.append(url)
+        return self.embed_items
+
+    def probe(self, url: str) -> list[dict]:
+        self.probe_calls.append(url)
+        raise AssertionError("cerez yokken gallery-dl denenmemeli")
+
+
 class PinterestFallbackTests(unittest.IsolatedAsyncioTestCase):
-    async def test_pinterest_pin_uses_gallery(self) -> None:
+    async def test_pinterest_pin_uses_gallery_after_ytdlp(self) -> None:
         url = "https://www.pinterest.com/pin/123456/"
         bot = _FakeBot()
         downloader = _TikTokDownloader()
@@ -411,7 +466,8 @@ class PinterestFallbackTests(unittest.IsolatedAsyncioTestCase):
                 queue=queue,  # type: ignore[arg-type]
             )
 
-        self.assertEqual(downloader.probed, [])
+        # Video icin once yt-dlp denenir; basarisizsa galeriye dusulur.
+        self.assertEqual(downloader.probed, [url])
         self.assertEqual(gallery.probed, [url])
         self.assertEqual(len(queue.submitted), 1)
         job = queue.submitted[0]

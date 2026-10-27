@@ -81,6 +81,21 @@ class GalleryDownloader:
             args += ["-o", "proxy-env=false"]
         return args
 
+    @property
+    def has_cookies(self) -> bool:
+        cookies = self._settings.cookies_file
+        return bool(cookies and cookies.exists())
+
+    def probe_embed(self, url: str) -> list[dict[str, Any]]:
+        """Instagram embed sayfasindan medya listesi (hizli yol)."""
+        if not instagram_shortcode(url):
+            return []
+        try:
+            return fetch_instagram_embed(url, self._settings.gallery_limit)
+        except InstagramEmbedError as exc:
+            log.info("Instagram embed kesif basarisiz (%s): %s", url, exc)
+            return []
+
     def _run(self, cmd: list[str], timeout: int) -> subprocess.CompletedProcess[str]:
         try:
             return subprocess.run(
@@ -107,7 +122,12 @@ class GalleryDownloader:
         Instagram giris duvarina takilirsa herkese acik gonderiler icin
         embed sayfasindaki fotoğraf URL'lerine dusulur.
         """
-        items = self._probe(url, set(), 0)
+        try:
+            items = self._probe(url, set(), 0)
+        except GalleryError as exc:
+            # Zaman asimi / alt surec hatasi embed yedegini engellemesin.
+            log.info("gallery-dl kesif basarisiz (%s): %s", url, exc)
+            items = []
         if items:
             return items
         if instagram_shortcode(url):
@@ -165,7 +185,12 @@ class GalleryDownloader:
             *self._common_args(),
             url,
         ]
-        proc = self._run(cmd, timeout=300)
+        try:
+            proc = self._run(cmd, timeout=300)
+        except GalleryError as exc:
+            # Zaman asimi dogrudan hata dondurmek yerine embed yedegine izin ver.
+            log.info("gallery-dl indirme basarisiz (%s): %s", url, exc)
+            proc = None
         files = sorted(
             (
                 path
@@ -174,7 +199,7 @@ class GalleryDownloader:
             ),
             key=lambda path: path.name,
         )
-        if proc.returncode == 0 and files:
+        if proc is not None and proc.returncode == 0 and files:
             return files[: self._settings.gallery_limit]
 
         # gallery-dl login duvarina takildiysa herkese acik Instagram
@@ -190,6 +215,8 @@ class GalleryDownloader:
                 if embed_files:
                     return embed_files[: self._settings.gallery_limit]
 
+        if proc is None:
+            raise GalleryError("Gönderi indirilemedi (zaman aşımı).")
         if proc.returncode != 0:
             detail = (proc.stderr or "").strip().splitlines()
             hint = detail[-1][:200] if detail else "bilinmeyen hata"

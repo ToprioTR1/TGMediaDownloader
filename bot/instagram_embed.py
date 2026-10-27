@@ -20,7 +20,10 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
-_UA = "Mozilla/5.0"
+_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+)
 _MAX_HTML_BYTES = 4 * 1024 * 1024
 _MAX_IMAGE_BYTES = 50 * 1024 * 1024
 _IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
