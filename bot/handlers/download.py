@@ -93,6 +93,19 @@ INSTAGRAM_HINT = (
     "Gönderi özel veya giriş gerektiriyor olabilir; sunucuya "
     "<code>cookies.txt</code> eklenmesi gerekiyor."
 )
+INSTAGRAM_COOKIE_HINT = (
+    "❌ Instagram gönderisi alınamadı.\n"
+    "Çerezler geçersiz veya süresi dolmuş olabilir; gönderi yaş kısıtlı da "
+    "olabilir. <code>cookies.txt</code> dosyasını yenileyin."
+)
+
+
+def _instagram_hint(gallery: GalleryDownloader | None) -> str:
+    return (
+        INSTAGRAM_COOKIE_HINT
+        if getattr(gallery, "has_cookies", False)
+        else INSTAGRAM_HINT
+    )
 
 
 class SizeLimitError(Exception):
@@ -174,6 +187,19 @@ def _pinterest_url(url: str) -> bool:
         or host == "pin.it"
         or host.endswith(".pin.it")
     )
+
+
+def _instagram_post_url(url: str) -> bool:
+    """Instagram /p/ gonderisi mi? (Reel/TV haric; onlar video odakli.)"""
+    host = _url_host(url)
+    if not (
+        host == "instagram.com"
+        or host.endswith(".instagram.com")
+        or host == "instagr.am"
+        or host.endswith(".instagr.am")
+    ):
+        return False
+    return urlparse(url).path.startswith("/p/")
 
 
 def _supports_url(
@@ -828,12 +854,18 @@ async def _process_text(
         info: MediaInfo | None = None
         gallery_items: list[dict] | None = None
         gallery_checked = False
+        gallery_first = False
 
         # yt-dlp TikTok fotoğraf gönderilerini desteklemiyor; doğrudan
         # gallery-dl kullan. Kısa linkler önce yt-dlp ile denenir.
         if _tiktok_photo_url(url) and gallery.available:
             gallery_items = await _probe_gallery(gallery, url)
             gallery_checked = True
+        elif _instagram_post_url(url) and gallery.available:
+            # /p/ gönderileri fotoğraf veya carousel olabilir. yt-dlp bunlarda
+            # "No video formats found" verip vakit kaybettiriyor; önce galeri.
+            gallery_items = await _probe_gallery(gallery, url)
+            gallery_first = True
 
         async def _retry_notice() -> None:
             await queue.edit_status(
@@ -861,7 +893,7 @@ async def _process_text(
             await queue.forget_status(chat_id, status.message_id)
             continue
         except DownloadError as exc:
-            if not gallery_checked and _gallery_url(url):
+            if not gallery_checked and not gallery_first and _gallery_url(url):
                 gallery_items = await _probe_gallery(gallery, url)
             if not gallery_items:
                 if gallery_checked:
@@ -882,7 +914,7 @@ async def _process_text(
                     await queue.edit_status(
                         chat_id,
                         status.message_id,
-                        INSTAGRAM_HINT,
+                        _instagram_hint(gallery),
                         keyboard=_remember_probe_failure(
                             chat_id, user_id, status.message_id, text, url
                         ),
@@ -924,7 +956,7 @@ async def _process_text(
             gallery_items = await _probe_gallery(gallery, url)
             if gallery_items is None:
                 message = (
-                    INSTAGRAM_HINT
+                    _instagram_hint(gallery)
                     if instagram_shortcode(url)
                     else "❌ Bu gönderide indirilebilir video bulunamadı."
                 )

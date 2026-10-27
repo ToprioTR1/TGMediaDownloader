@@ -522,13 +522,15 @@ make no network requests.
   especially for files larger than about 10 MB. If ffprobe/ffmpeg is unavailable,
   the bot falls back to the previous behavior.
 - Instagram photo/carousel, TikTok photo and Pinterest pin posts are downloaded
-  with gallery-dl. Pinterest video pins are probed with yt-dlp first so quality
-  selection still works; image pins fall back to gallery-dl. Single-media posts
-  and multi-item albums are stored in the `file_id` cache and replayed without
-  downloading again. For Instagram, the public embed page is tried first; if it
-  has no media and `cookies.txt` is absent, gallery-dl is skipped instead of
-  waiting for a two-minute timeout, and the bot explains that cookies are
-  required. Private posts always require `cookies.txt`.
+  with gallery-dl. Instagram `/p/` posts are treated as photo/carousel first, so
+  yt-dlp is not asked for a video and fails; reels/TV still use yt-dlp. Pinterest
+  video pins are probed with yt-dlp first so quality selection still works; image
+  pins fall back to gallery-dl. Single-media posts and multi-item albums are
+  stored in the `file_id` cache and replayed without downloading again. For
+  Instagram, the public embed page is tried first; if it has no media and
+  `cookies.txt` is absent, gallery-dl is skipped instead of waiting for a
+  two-minute timeout, and the bot explains that cookies are required. Private
+  posts always require `cookies.txt`.
 - The `file_id` cache is stored in SQLite (`CACHE_DAYS`, 30 days by default).
   If Telegram rejects a file, the cache entry is removed automatically and the
   media is downloaded again. Old entries are pruned at startup, and admins can

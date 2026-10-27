@@ -28,6 +28,7 @@ from bot.handlers.download import (  # noqa: E402
     _gallery_platform,
     _gallery_title,
     _gallery_url,
+    _instagram_post_url,
     _needs_gallery,
     _pinterest_url,
     _probe_gallery,
@@ -144,6 +145,20 @@ class UrlSupportTests(unittest.TestCase):
         self.assertTrue(_needs_gallery(info))
         info.heights = [720]
         self.assertFalse(_needs_gallery(info))
+
+    def test_instagram_post_url_detection(self) -> None:
+        self.assertTrue(
+            _instagram_post_url("https://www.instagram.com/p/DeHco0SA5Jy/")
+        )
+        self.assertTrue(
+            _instagram_post_url("https://instagram.com/p/abc/?utm_source=x")
+        )
+        self.assertFalse(
+            _instagram_post_url("https://www.instagram.com/reel/abc/")
+        )
+        self.assertFalse(
+            _instagram_post_url("https://www.instagram.com/p.evil.example/p/abc/")
+        )
 
 
 class GalleryQueueParsingTests(unittest.TestCase):
@@ -266,9 +281,13 @@ class _TikTokDownloader:
 
 class _GalleryWithItems:
     available = True
+    has_cookies = True
 
     def __init__(self) -> None:
         self.probed: list[str] = []
+
+    def probe_embed(self, url: str) -> list[dict]:
+        return []
 
     def probe(self, url: str) -> list[dict]:
         self.probed.append(url)
@@ -419,6 +438,35 @@ class InstagramFallbackTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(items, [item])
         self.assertEqual(gallery.probe_calls, [])
+
+    async def test_instagram_post_uses_gallery_before_ytdlp(self) -> None:
+        url = "https://www.instagram.com/p/DeHco0SA5Jy/"
+        bot = _FakeBot()
+        downloader = _TikTokDownloader()
+        gallery = _GalleryWithItems()
+        queue = _GalleryQueue()
+        with patch(
+            "bot.handlers.download.is_blocked_url",
+            new=AsyncMock(return_value=False),
+        ):
+            await _process_text(
+                bot,  # type: ignore[arg-type]
+                123,
+                42,
+                url,
+                settings=SimpleNamespace(  # type: ignore[arg-type]
+                    max_queue_per_user=5,
+                    daily_limit=0,
+                ),
+                db=_FakeDb(),  # type: ignore[arg-type]
+                downloader=downloader,  # type: ignore[arg-type]
+                gallery=gallery,  # type: ignore[arg-type]
+                queue=queue,  # type: ignore[arg-type]
+            )
+        self.assertEqual(downloader.probed, [], "fotoğraf gönderisinde yt-dlp denenmemeli")
+        self.assertEqual(gallery.probed, [url])
+        self.assertEqual(len(queue.submitted), 1)
+        self.assertEqual(queue.submitted[0].kind, "gallery")
 
 
 class _InstagramGallery:

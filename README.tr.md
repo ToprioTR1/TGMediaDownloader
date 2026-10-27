@@ -513,12 +513,14 @@ kullanır ve ağ isteği yapmaz.
   Telegram'daki en-boy oranını korur. ffprobe/ffmpeg yoksa bot eski davranışa
   döner.
 - Instagram fotoğraf/carousel, TikTok fotoğraf ve Pinterest pin gönderileri
-  gallery-dl ile indirilir. Pinterest video pinlerinde kalite seçimi için önce
-  yt-dlp denenir; görüntü pinleri gallery-dl'ye düşer. Tek medyalı gönderiler ve
-  çoklu albümler `file_id` önbelleğine yazılır ve yeniden indirilmeden gönderilir.
-  Instagram'da önce herkese açık embed sayfası denenir; medya yoksa ve
-  `cookies.txt` yoksa gallery-dl iki dakika beklenmeden atlanır ve bot çerez
-  gerektiğini söyler. Özel gönderiler için her zaman `cookies.txt` gerekir.
+  gallery-dl ile indirilir. Instagram `/p/` gönderileri önce fotoğraf/carousel
+  olarak ele alınır; yt-dlp'den video aranmaz. Reel/TV gönderileri yt-dlp ile
+  işlenir. Pinterest video pinlerinde kalite seçimi için önce yt-dlp denenir;
+  görüntü pinleri gallery-dl'ye düşer. Tek medyalı gönderiler ve çoklu albümler
+  `file_id` önbelleğine yazılır ve yeniden indirilmeden gönderilir. Instagram'da
+  önce herkese açık embed sayfası denenir; medya yoksa ve `cookies.txt` yoksa
+  gallery-dl iki dakika beklenmeden atlanır ve bot çerez gerektiğini söyler.
+  Özel gönderiler için her zaman `cookies.txt` gerekir.
 - `file_id` önbelleği SQLite'ta tutulur (`CACHE_DAYS`, varsayılan 30 gün).
   Telegram dosyayı reddederse önbellek otomatik temizlenir ve yeniden indirilir.
   Eski kayıtlar açılışta budanır; adminler `/cache` ile önbelleği inceleyebilir,
