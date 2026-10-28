@@ -24,8 +24,9 @@ ile yazıldı, Docker ile çalışacak şekilde hazırlandı.
 - 📐 Telegram'da doğru en-boy oranı: her videoyla birlikte gerçek genişlik,
   yükseklik, süre ve küçük bir JPEG önizleme gönderilir; büyük videolar kare
   kutucuk olarak görünmez
-- ⚙️ `/ayar` ile kişisel varsayılanlar: kalite, ses tercihi, caption, MP3
-  bit hızı, H.264 uyumluluk modu ve video/dosya gönderimi
+- ⚙️ `/ayar` ile kişisel varsayılanlar: kalite, ses tercihi, caption (varsayılan
+  kapalı; `/ayar caption aç` ile açılır), MP3 bit hızı, H.264 uyumluluk modu ve
+  video/dosya gönderimi
 - 🔘 Her videonun altında hızlı aksiyonlar: `🎵 Ses olarak al` ·
   `🎚 Kalite değiştir` · `📄 Dosya olarak gönder` · `🖼 Kapak fotoğrafı`;
   mümkün olduğunda yeniden indirmeden `file_id` önbelleğinden çalışır ve

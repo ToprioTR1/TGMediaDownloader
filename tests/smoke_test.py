@@ -435,6 +435,13 @@ async def main() -> int:
         mark = len(bot.calls)
         await dp.feed_update(bot, msg_update("/start"))
         check(any("Merhaba" in t for t in bot.texts_since(mark)), "/start cevap vermedi")
+        fresh_user = await db.get_user(ADMIN.id) or {}
+        check(
+            int(fresh_user.get("show_caption", 1)) == 0,
+            "caption varsayılanı kapalı değil",
+        )
+        # Testlerin geri kalanı caption içeriğini kontrol ediyor.
+        await db.update_user_settings(ADMIN.id, show_caption=True)
         print("1) /start OK")
 
         # varsayilan secimi dogrulamak icin mevcut kaliteleri ogren

@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS users (
     is_promoted     INTEGER NOT NULL DEFAULT 0,
     default_quality INTEGER NOT NULL DEFAULT 0,
     audio_default   INTEGER NOT NULL DEFAULT 0,
-    show_caption    INTEGER NOT NULL DEFAULT 1,
+    show_caption    INTEGER NOT NULL DEFAULT 0,
     audio_bitrate   INTEGER NOT NULL DEFAULT 192,
     video_codec     TEXT NOT NULL DEFAULT 'auto',
     download_mode   TEXT NOT NULL DEFAULT 'video'
@@ -129,7 +129,7 @@ class Database:
                 "is_promoted": "INTEGER NOT NULL DEFAULT 0",
                 "default_quality": "INTEGER NOT NULL DEFAULT 0",
                 "audio_default": "INTEGER NOT NULL DEFAULT 0",
-                "show_caption": "INTEGER NOT NULL DEFAULT 1",
+                "show_caption": "INTEGER NOT NULL DEFAULT 0",
             },
         )
         await self._add_columns(
@@ -170,6 +170,16 @@ class Database:
                 "Boyut bilgisi olmayan %s eski video onbellegi temizlendi",
                 stale_videos,
             )
+        # Caption varsayilani artik kapali. Mevcut kullanicilari bir kez
+        # kapaliya cek; kullanici sonradan /ayar caption ac ile acabilir.
+        if await self.state_get("caption_default_off_v1") is None:
+            async with self._write_lock:
+                await self.conn.execute("UPDATE users SET show_caption = 0")
+                await self.conn.execute(
+                    "INSERT OR IGNORE INTO app_state(key, value) VALUES(?, ?)",
+                    ("caption_default_off_v1", "1"),
+                )
+                await self.conn.commit()
 
     async def close(self) -> None:
         if self._conn is not None:

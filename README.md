@@ -28,8 +28,9 @@ Built with Python 3.12 + [aiogram 3](https://github.com/aiogram/aiogram) +
 - 📐 Correct Telegram aspect ratio: the real width, height, duration, and a small
   JPEG thumbnail are sent with every video, so larger videos are not shown as a
   square tile
-- ⚙️ Per-user defaults via `/ayar`: target quality, audio-only links, captions,
-  MP3 bitrate, H.264 compatibility mode and video/document delivery
+- ⚙️ Per-user defaults via `/ayar`: target quality, audio-only links, captions
+  (captions are off by default; enable with `/ayar caption aç`), MP3 bitrate,
+  H.264 compatibility mode and video/document delivery
 - 🔘 Quick actions under every video: `🎵 Get audio` · `🎚 Change quality` ·
   `📄 Send as file` · `🖼 Cover photo`, all served from the `file_id` cache
   without re-downloading when possible; also shown in groups

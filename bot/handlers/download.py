@@ -564,7 +564,7 @@ async def _resolve_and_queue(
         platform=info.platform,
         duration=info.duration,
         source_url=info.webpage_url,
-        show_caption=bool(user.get("show_caption", 1)),
+        show_caption=bool(user.get("show_caption", 0)),
         as_document=as_document,
         status_header=status_header,
         audio_bitrate=int(user.get("audio_bitrate") or 192),
@@ -839,7 +839,7 @@ async def _process_text(
 
     user = await db.get_user(user_id) or {}
     requested, audio = _request_options(text, user)
-    show_caption = bool(user.get("show_caption", 1))
+    show_caption = bool(user.get("show_caption", 0))
     as_document = wants_document(text) or _as_document(user)
 
     reuse_status = existing_status
@@ -1307,7 +1307,7 @@ async def _queue_with_status(
         row, callback.from_user.id, preset, heights=heights
     )
     job.chat_id = chat_id
-    job.show_caption = bool(user.get("show_caption", 1))
+    job.show_caption = bool(user.get("show_caption", 0))
     if preset == "audio":
         # Ses her zaman ses olarak gonderilir; varsayilan dosya modu ezmesin.
         job.as_document = False

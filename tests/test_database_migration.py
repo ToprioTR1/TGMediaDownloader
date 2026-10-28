@@ -56,6 +56,40 @@ class CacheMigrationTests(unittest.IsolatedAsyncioTestCase):
                 await db.close()
 
 
+class CaptionDefaultTests(unittest.IsolatedAsyncioTestCase):
+    async def test_new_user_caption_is_off(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="caption-") as raw:
+            db = Database(Path(raw) / "bot.db")
+            await db.connect()
+            try:
+                user = await db.touch_user(42, "user", "User")
+                self.assertEqual(int(user["show_caption"]), 0)
+            finally:
+                await db.close()
+
+    async def test_existing_users_are_disabled_once(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="caption-") as raw:
+            path = Path(raw) / "bot.db"
+            db = Database(path)
+            await db.connect()
+            await db.touch_user(42, "user", "User")
+            await db.update_user_settings(42, show_caption=True)
+            # Ilk acilista yazilan isareti sil ki migrasyon yeniden calissin.
+            await db.conn.execute(
+                "DELETE FROM app_state WHERE key = 'caption_default_off_v1'"
+            )
+            await db.conn.commit()
+            await db.close()
+
+            db = Database(path)
+            await db.connect()
+            try:
+                user = await db.get_user(42) or {}
+                self.assertEqual(int(user["show_caption"]), 0)
+            finally:
+                await db.close()
+
+
 class BandwidthTests(unittest.IsolatedAsyncioTestCase):
     async def test_report_splits_upload_and_download(self) -> None:
         with tempfile.TemporaryDirectory(prefix="bw-") as raw:

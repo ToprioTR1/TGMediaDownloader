@@ -170,7 +170,7 @@ def _parse_bool(value: str) -> bool | None:
 def _settings_text(user: dict) -> str:
     quality = int(user.get("default_quality") or 0)
     audio = bool(user.get("audio_default"))
-    caption = bool(user.get("show_caption", 1))
+    caption = bool(user.get("show_caption", 0))
     bitrate = int(user.get("audio_bitrate") or 192)
     codec = str(user.get("video_codec") or "auto")
     mode = str(user.get("download_mode") or "video")
@@ -200,7 +200,7 @@ async def _preferences_keyboard(user: dict) -> InlineKeyboardMarkup:
     codec = str(user.get("video_codec") or "auto")
     mode = str(user.get("download_mode") or "video")
     quality = int(user.get("default_quality") or 0)
-    caption = bool(user.get("show_caption", 1))
+    caption = bool(user.get("show_caption", 0))
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
