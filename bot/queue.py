@@ -97,6 +97,8 @@ class Job:
     parent_id: str | None = None
     playlist_index: int = 0
     playlist_total: int = 0
+    artist: str | None = None
+    album: str | None = None
 
     @property
     def cache_preset(self) -> str:
@@ -130,6 +132,8 @@ class Job:
             "parent_id": self.parent_id,
             "playlist_index": self.playlist_index,
             "playlist_total": self.playlist_total,
+            "artist": self.artist,
+            "album": self.album,
         }
         data.update(changes)
         return Job(**data)
@@ -1240,7 +1244,7 @@ class JobQueue:
                         caption=caption,
                         duration=job.duration or 0,
                         title=job.title[:64],
-                        performer=job.platform[:64],
+                        performer=(job.artist or job.platform)[:64],
                         reply_markup=keyboard,
                         request_timeout=self._settings.upload_timeout_sec,
                     )

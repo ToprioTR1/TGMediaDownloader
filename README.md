@@ -17,7 +17,9 @@ Built with Python 3.12 + [aiogram 3](https://github.com/aiogram/aiogram) +
   TikTok 1012p, YouTube 720p)
 - 📦 Size guard: if the selected quality would exceed `MAX_UPLOAD_MB`, it automatically
   steps down to the next lower quality
-- 🎵 Audio only with `mp3` / `ses` (`ses` is Turkish for "audio")
+- 🎵 Audio only with `mp3` / `ses` (`ses` is Turkish for "audio"); MP3 files
+  carry title, artist, album, date and cover artwork when the source provides
+  them (for example YouTube Music artwork)
 - 📄 Send as a file with `dosya` / `belge` / `file` / `fl`
 - ⚡️ `file_id` cache: requesting the same video again sends it instantly without re-downloading
 - 🧵 Duplicate links: sending the same link while it is still downloading is
@@ -458,6 +460,7 @@ python -m unittest tests.test_media -v              # ffprobe/thumbnail tests (f
 python -m unittest tests.test_retry -v              # one-retry behavior tests
 python -m unittest tests.test_database_migration -v # old cache migration tests
 python -m unittest tests.test_qol -v                # buttons, smart errors, queue, playlists
+python -m unittest tests.test_audio_metadata -v      # MP3 tags and cover embedding
 ```
 
 The smoke test creates its own data under `.tmp/` and does not make real requests

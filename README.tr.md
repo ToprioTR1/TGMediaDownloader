@@ -14,7 +14,9 @@ ile yazıldı, Docker ile çalışacak şekilde hazırlandı.
 - 🎯 Akıllı kalite: link sonuna `1080p` / `720p` / `4k` yazarsan en yakın mevcut kalite;
   yazmazsan platform varsayılanı (Instagram 1280p, TikTok 1012p, YouTube 720p)
 - 📦 Boyut koruması: seçilen kalite `MAX_UPLOAD_MB` limitini aşacaksa otomatik bir alt kaliteye iner
-- 🎵 `mp3` / `ses` yazarak sadece ses indirme
+- 🎵 `mp3` / `ses` yazarak sadece ses indirme; MP3 dosyalarına başlık, sanatçı,
+  albüm, tarih ve kaynakta varsa albüm kapağı gömülür (ör. YouTube Music
+  kapağı)
 - 📄 `dosya` / `belge` / `file` / `fl` yazarak medyayı Telegram dosyası olarak gönderme
 - ⚡️ `file_id` önbelleği: aynı video tekrar istenirse yeniden indirilmeden anında gönderilir
 - 🧵 Aynı link indirilirken tekrar gönderilirse ikinci indirme veya durum mesajı açılmaz
@@ -448,6 +450,7 @@ python -m unittest tests.test_media -v              # ffprobe/önizleme testleri
 python -m unittest tests.test_retry -v              # tek otomatik tekrar testleri
 python -m unittest tests.test_database_migration -v # eski önbellek taşıma testleri
 python -m unittest tests.test_qol -v                # butonlar, akıllı hatalar, kuyruk, listeler
+python -m unittest tests.test_audio_metadata -v      # MP3 etiketleri ve kapak gömme
 ```
 
 Duman testi kendi verisini `.tmp/` altında oluşturur ve Telegram'a gerçek istek

@@ -49,6 +49,8 @@ class MediaInfo:
     # Oynatma listesi ise toplam video sayisi ve (varsa) siralanan ilk kayitlar.
     playlist_count: int = 0
     playlist_entries: list["MediaInfo"] = field(default_factory=list)
+    artist: str | None = None
+    album: str | None = None
 
     @property
     def is_audio_only(self) -> bool:
@@ -363,6 +365,13 @@ class Downloader:
             platform=platform_name(str(extractor)),
             webpage_url=info.get("webpage_url") or url,
             estimated_sizes=estimated_sizes,
+            artist=(
+                info.get("artist")
+                or info.get("creator")
+                or info.get("uploader")
+                or info.get("channel")
+            ),
+            album=info.get("album") or info.get("series"),
         )
 
     # ---------------------------------------------------------------- indirme
@@ -443,12 +452,17 @@ class Downloader:
 
         if preset == "audio":
             bitrate = audio_bitrate if audio_bitrate in {128, 192, 320} else 192
+            # Kapak resmi ve ID3 etiketleri (baslik, sanatci, album, yil)
+            # dosyanin icine gomulur; Telegram disinda da dogru gorunur.
+            opts["writethumbnail"] = True
             opts["postprocessors"] = [
                 {
                     "key": "FFmpegExtractAudio",
                     "preferredcodec": "mp3",
                     "preferredquality": str(bitrate),
-                }
+                },
+                {"key": "FFmpegMetadata"},
+                {"key": "EmbedThumbnail"},
             ]
         else:
             opts["merge_output_format"] = "mp4"
@@ -475,8 +489,27 @@ class Downloader:
         files = [
             p
             for p in outdir.iterdir()
-            if p.is_file() and p.suffix.lower() not in {".part", ".ytdl", ".temp"}
+            if p.is_file()
+            and p.suffix.lower()
+            not in {
+                ".part",
+                ".ytdl",
+                ".temp",
+                # Kapak/subtitle/info dosyalari medya sanilmasin.
+                ".jpg",
+                ".jpeg",
+                ".png",
+                ".webp",
+                ".vtt",
+                ".srt",
+                ".json",
+                ".description",
+            }
         ]
+        if preset == "audio":
+            mp3_files = [p for p in files if p.suffix.lower() == ".mp3"]
+            if mp3_files:
+                files = mp3_files
         if not files:
             raise DownloadError("İndirme tamamlandı ancak dosya bulunamadı.")
 

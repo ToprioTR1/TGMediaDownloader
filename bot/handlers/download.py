@@ -572,6 +572,8 @@ async def _resolve_and_queue(
         heights=list(info.heights),
         playlist_index=index or 0,
         playlist_total=total or 0,
+        artist=info.artist,
+        album=info.album,
     )
     _quality_states[job.url] = list(info.heights)
     _quality_sizes[job.url] = dict(info.estimated_sizes)
