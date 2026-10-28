@@ -83,6 +83,8 @@ GALLERY_HOSTS = (
     "instagr.am",
     "pinterest.com",
     "pin.it",
+    "x.com",
+    "twitter.com",
 )
 TIKTOK_SHORT_HOSTS = {"vm.tiktok.com", "vt.tiktok.com"}
 
@@ -175,6 +177,8 @@ def _gallery_platform(url: str) -> str:
     host = _url_host(url)
     if "pinterest" in host or host == "pin.it" or host.endswith(".pin.it"):
         return "Pinterest"
+    if host == "x.com" or host.endswith(".x.com") or host == "twitter.com" or host.endswith(".twitter.com"):
+        return "X (Twitter)"
     return "TikTok" if _is_tiktok_host(host) else "Instagram"
 
 
@@ -221,6 +225,9 @@ def _needs_gallery(info: MediaInfo) -> bool:
     """
     if info.platform == "Pinterest":
         return not info.heights
+    if info.platform == "X (Twitter)":
+        # X gonderileri fotoğraf veya video olabilir; video akisi yoksa galeri.
+        return not info.heights
     return (
         info.platform in {"Instagram", "TikTok"}
         and not info.heights
@@ -229,7 +236,15 @@ def _needs_gallery(info: MediaInfo) -> bool:
 
 
 def _gallery_title(items: list[dict], platform: str = "Instagram") -> str:
-    for key in ("description", "desc", "caption", "title", "username", "user"):
+    for key in (
+        "description",
+        "desc",
+        "caption",
+        "content",
+        "title",
+        "username",
+        "user",
+    ):
         value = items[0].get(key) if items else None
         if isinstance(value, str) and value.strip():
             return value.strip().splitlines()[0][:150]

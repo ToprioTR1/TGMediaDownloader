@@ -1,4 +1,4 @@
-"""gallery-dl sarmalayicisi: Instagram, TikTok ve Pinterest medya icin.
+"""gallery-dl sarmalayicisi: Instagram, TikTok, Pinterest ve X medya icin.
 
 yt-dlp video odaklidir; fotoğraf, carousel veya Pinterest pinlerinde
 gallery-dl kullanilir. Alt surec olarak calisir, bu yuzden

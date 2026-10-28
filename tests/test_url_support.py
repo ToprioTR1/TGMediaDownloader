@@ -114,10 +114,22 @@ class UrlSupportTests(unittest.TestCase):
             _gallery_platform("https://www.pinterest.com/pin/123456/"),
             "Pinterest",
         )
+        self.assertEqual(
+            _gallery_platform("https://x.com/user/status/123"),
+            "X (Twitter)",
+        )
+        self.assertEqual(
+            _gallery_platform("https://twitter.com/user/status/123"),
+            "X (Twitter)",
+        )
         self.assertEqual(_gallery_title([], "Pinterest"), "Pinterest gönderisi")
         self.assertEqual(
             _gallery_title([{"desc": "TikTok başlığı"}], "TikTok"),
             "TikTok başlığı",
+        )
+        self.assertEqual(
+            _gallery_title([{"content": "Tweet metni"}], "X (Twitter)"),
+            "Tweet metni",
         )
         self.assertEqual(_gallery_title([], "TikTok"), "TikTok gönderisi")
 
@@ -165,6 +177,33 @@ class UrlSupportTests(unittest.TestCase):
         self.assertFalse(
             _instagram_post_url("https://www.instagram.com/p.evil.example/p/abc/")
         )
+
+    def test_x_photo_urls_use_gallery(self) -> None:
+        for url in (
+            "https://x.com/user/status/123",
+            "https://twitter.com/user/status/123",
+            "https://mobile.twitter.com/user/status/123",
+        ):
+            self.assertTrue(_gallery_url(url), url)
+        self.assertFalse(
+            _gallery_url("https://x.com.evil.example/user/status/123")
+        )
+
+    def test_x_image_post_needs_gallery(self) -> None:
+        info = MediaInfo(
+            url="https://x.com/user/status/1",
+            title="Tweet",
+            uploader=None,
+            duration=None,
+            thumbnail=None,
+            heights=[],
+            has_audio=True,
+            platform="X (Twitter)",
+            webpage_url="https://x.com/user/status/1",
+        )
+        self.assertTrue(_needs_gallery(info))
+        info.heights = [720]
+        self.assertFalse(_needs_gallery(info))
 
 
 class GalleryQueueParsingTests(unittest.TestCase):
@@ -537,6 +576,39 @@ class _InstagramGallery:
     def probe(self, url: str) -> list[dict]:
         self.probe_calls.append(url)
         raise AssertionError("cerez yokken gallery-dl denenmemeli")
+
+
+class XPhotoFallbackTests(unittest.IsolatedAsyncioTestCase):
+    async def test_x_photo_post_falls_back_to_gallery(self) -> None:
+        url = "https://x.com/vatanimsirkiye/status/2114618051345748354"
+        bot = _FakeBot()
+        downloader = _TikTokDownloader()
+        gallery = _GalleryWithItems()
+        queue = _GalleryQueue()
+        with patch(
+            "bot.handlers.download.is_blocked_url",
+            new=AsyncMock(return_value=False),
+        ):
+            await _process_text(
+                bot,  # type: ignore[arg-type]
+                123,
+                42,
+                url,
+                settings=SimpleNamespace(  # type: ignore[arg-type]
+                    max_queue_per_user=5,
+                    daily_limit=0,
+                ),
+                db=_FakeDb(),  # type: ignore[arg-type]
+                downloader=downloader,  # type: ignore[arg-type]
+                gallery=gallery,  # type: ignore[arg-type]
+                queue=queue,  # type: ignore[arg-type]
+            )
+        self.assertEqual(downloader.probed, [url])
+        self.assertEqual(gallery.probed, [url])
+        self.assertEqual(len(queue.submitted), 1)
+        job = queue.submitted[0]
+        self.assertEqual(job.kind, "gallery")
+        self.assertEqual(job.platform, "X (Twitter)")
 
 
 class PinterestFallbackTests(unittest.IsolatedAsyncioTestCase):

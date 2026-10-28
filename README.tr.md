@@ -45,9 +45,9 @@ ile yazıldı, Docker ile çalışacak şekilde hazırlandı.
 - 🚦 Yalnızca yt-dlp site eşleştiricisinin tanıdığı URL'ler (veya sitelerin
   resmi kısa link alan adları) işlenir; normal web sayfaları ağ isteği
   yapılmadan ve mesaj yazılmadan yok sayılır
-- 🖼 Instagram fotoğraf / carousel, TikTok fotoğraf ve Pinterest pin gönderileri
-  (gallery-dl ile; herkese açık Instagram gönderileri için embed yedeğiyle;
-  albüm olarak, `dosya` yazılırsa belge olarak)
+- 🖼 Instagram fotoğraf / carousel, TikTok fotoğraf, Pinterest pin ve X/Twitter
+  fotoğraf gönderileri (gallery-dl ile; herkese açık Instagram gönderileri için
+  embed yedeğiyle; albüm olarak, `dosya` yazılırsa belge olarak)
 - 🚫 Her Python TCP `connect` anında SSRF koruması: yönlendirmeler, DNS
   rebinding, ikincil medya URL'leri ve bulut metadata adresleri reddedilir;
   konteyner çıkışı için host güvenlik duvarı yapılandırması dahildir
@@ -517,15 +517,17 @@ kullanır ve ağ isteği yapmaz.
   bilgisiyle gönderilir. Bu, özellikle yaklaşık 10 MB'tan büyük dosyalarda
   Telegram'daki en-boy oranını korur. ffprobe/ffmpeg yoksa bot eski davranışa
   döner.
-- Instagram fotoğraf/carousel, TikTok fotoğraf ve Pinterest pin gönderileri
-  gallery-dl ile indirilir. Instagram `/p/` gönderileri önce fotoğraf/carousel
-  olarak ele alınır; yt-dlp'den video aranmaz. Reel/TV gönderileri yt-dlp ile
-  işlenir. Pinterest video pinlerinde kalite seçimi için önce yt-dlp denenir;
-  görüntü pinleri gallery-dl'ye düşer. Tek medyalı gönderiler ve çoklu albümler
-  `file_id` önbelleğine yazılır ve yeniden indirilmeden gönderilir. Instagram'da
-  önce herkese açık embed sayfası denenir; medya yoksa ve `cookies.txt` yoksa
-  gallery-dl iki dakika beklenmeden atlanır ve bot çerez gerektiğini söyler.
-  Özel gönderiler için her zaman `cookies.txt` gerekir.
+- Instagram fotoğraf/carousel, TikTok fotoğraf, Pinterest pin ve X/Twitter
+  fotoğraf gönderileri gallery-dl ile indirilir. Instagram `/p/` gönderileri önce
+  fotoğraf/carousel olarak ele alınır; yt-dlp'den video aranmaz. Reel/TV
+  gönderileri yt-dlp ile işlenir. Pinterest video pinlerinde kalite seçimi için
+  önce yt-dlp denenir; görüntü pinleri gallery-dl'ye düşer. X/Twitter video
+  tweet'leri yt-dlp, fotoğraf tweet'leri gallery-dl ile indirilir. Tek medyalı
+  gönderiler ve çoklu albümler `file_id` önbelleğine yazılır ve yeniden
+  indirilmeden gönderilir. Instagram'da önce herkese açık embed sayfası denenir;
+  medya yoksa ve `cookies.txt` yoksa gallery-dl iki dakika beklenmeden atlanır ve
+  bot çerez gerektiğini söyler. Özel gönderiler için her zaman `cookies.txt`
+  gerekir.
 - `file_id` önbelleği SQLite'ta tutulur (`CACHE_DAYS`, varsayılan 30 gün).
   Telegram dosyayı reddederse önbellek otomatik temizlenir ve yeniden indirilir.
   Eski kayıtlar açılışta budanır; adminler `/cache` ile önbelleği inceleyebilir,
